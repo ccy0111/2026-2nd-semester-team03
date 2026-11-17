@@ -162,3 +162,14 @@ test("downmixToMono and resampleLinear convert stereo 48kHz to mono 16kHz", () =
   assert.equal(resampled.length, 160);
   assert.ok(Math.abs(resampled[0] - 0.3) < 1e-5);
 });
+
+
+test("MIDI export rejects excess melodic instruments rather than dropping notes", () => {
+  const notes = Array.from({ length: 16 }, (_, program) => ({
+    program, pitch: 60, onset: 0, offset: 1, isDrum: false,
+  }));
+  assert.throws(() => encodeNotesToMidi(notes), /at most 15 melodic instruments/);
+  const supported = [...notes.slice(0, 15), { program: 128, pitch: 36, onset: 0, offset: 0.1, isDrum: true }];
+  const midi = encodeNotesToMidi(supported);
+  assert.equal(new DataView(midi.buffer).getUint16(10), 17); // tempo + all 16 tracks
+});

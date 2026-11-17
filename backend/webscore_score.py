@@ -59,7 +59,19 @@ def render_score(notes):
         for bar in range(5):
             x = 110 + bar * 240
             out.append(f'<path d="M {x} {top} V {bottom}" stroke="black"/>')
-        for pitch, onset, size, tied_in, tied_out in entries:
+        # Accidentals persist only within a measure, staff and octave. Sort by
+        # score time because input notes may arrive grouped by instrument/pitch.
+        accidental_state = {}
+        measure = None
+        conflicts = {}
+        for p, onset, *_ in entries:
+            letter, sharp = SPELLING[p % 12]
+            step = (p // 12 - 1) * 7 + letter
+            conflicts.setdefault((onset, step), set()).add(sharp)
+        for pitch, onset, size, tied_in, tied_out in sorted(entries, key=lambda n: (n[1], n[0])):
+            if onset // 16 != measure:
+                accidental_state.clear()
+                measure = onset // 16
             letter, sharp = SPELLING[pitch % 12]
             step = (pitch // 12 - 1) * 7 + letter
             y = bottom - (step - 30) * 5  # E4 is bottom treble line
@@ -69,8 +81,12 @@ def render_score(notes):
                 out.append(f'<path d="M {x-10} {ledger} H {x+10}" stroke="black"/>')
             for ledger in range(top - 10, int(y) - 1, -10):
                 out.append(f'<path d="M {x-10} {ledger} H {x+10}" stroke="black"/>')
-            if sharp:
-                out.append(f'<text x="{x-18}" y="{y+4}">♯</text>')
+            ambiguous_chord = len(conflicts[(onset, step)]) > 1
+            if ambiguous_chord or accidental_state.get(step, False) != sharp:
+                accidental = "♯" if sharp else "♮"
+                out.append(f'<text x="{x-18}" y="{y+4}">{accidental}</text>')
+            # After a chromatic unison, repeat an explicit accidental next time.
+            accidental_state[step] = None if ambiguous_chord else sharp
             out.append(f'<ellipse cx="{x}" cy="{y}" rx="6" ry="4" fill="{fill}" stroke="black" transform="rotate(-20 {x} {y})"/>')
             if size < 16:
                 out.append(f'<path d="M {x+5} {y} V {y-30}" stroke="black"/>')

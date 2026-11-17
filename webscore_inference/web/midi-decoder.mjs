@@ -153,7 +153,9 @@ export function encodeNotesToMidi(notes, { bpm = 120, ppq = 480 } = {}) {
   let nextChannel = 0;
   for (const track of tracksEvents.values()) {
     const ch = track.isDrum ? 9 : nextChannel === 9 ? (nextChannel = 10, nextChannel++) : nextChannel++;
-    if (ch > 15) continue;
+    if (ch > 15) {
+      throw new RangeError("MIDI export supports at most 15 melodic instruments plus percussion; no tracks were exported.");
+    }
     const raw = [];
     if (!track.isDrum) {
       raw.push(0x00, 0xc0 | ch, track.program & 0x7f);

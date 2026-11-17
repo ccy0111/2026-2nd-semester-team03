@@ -52,6 +52,21 @@ class AdapterTests(unittest.TestCase):
                 self.assertGreater(float(node.attrib['cy']),70)
                 self.assertLess(float(node.attrib['cy']),height-10)
 
+    def test_accidentals_reset_by_measure_octave_and_staff(self):
+        def marks(notes):
+            svg = render_score(notes).decode()
+            return svg.count('>♯</text>'), svg.count('>♮</text>')
+        self.assertEqual(marks([(0,61,0,.5),(0,60,.5,1)]),(1,1))
+        self.assertEqual(marks([(0,61,0,.5),(0,61,.5,1)]),(1,0))
+        self.assertEqual(marks([(0,61,0,.5),(0,60,2,2.5)]),(1,0))
+        self.assertEqual(marks([(0,61,0,.5),(0,61,2,2.5)]),(2,0))
+        self.assertEqual(marks([(0,61,0,.5),(0,72,.5,1)]),(1,0))
+        self.assertEqual(marks([(0,61,0,.5),(40,60,.5,1)]),(1,0))
+        # Unsorted source events still follow chronological accidental state.
+        self.assertEqual(marks([(0,60,.5,1),(0,61,0,.5)]),(1,1))
+        # Chromatic unison and its next natural note remain explicit.
+        self.assertEqual(marks([(0,60,0,.5),(0,61,0,.5),(0,60,.5,1)]),(1,2))
+
     def test_audio_errors(self):
         class Probe:
             stdout=b'{"format":{"format_name":"wav"},"streams":[{"codec_type":"audio","codec_name":"pcm_s16le"}]}'
