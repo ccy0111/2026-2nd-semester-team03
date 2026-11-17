@@ -1,1 +1,17 @@
 .env
+# Local models, secrets, runtime and training artifacts
+.env.*
+!.env.example
+/models/*
+!/models/.gitkeep
+*.onnx
+*.onnx_data
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/

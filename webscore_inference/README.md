@@ -32,5 +32,4 @@ node --test tests/test_inference.mjs
 ## Publication status
 This is a source-only snapshot. Model weights and training checkpoints are intentionally omitted while training continues. Real ONNX/browser inference has not been validated in this publication; the 5 Node tests use synthetic inputs and a mock runtime.
 
-This package is separate from the repository's FastAPI backend; it does not implement backend/transcription.py or score-image rendering. For hosting, place tokenizer.json and config.json alongside the externally supplied ONNX files at baseUrl (default /models). The metadata files are stored at this package root and are not automatically served from /models.
-
+This browser package remains separate from the FastAPI API. The new CPU adapter in backend/ implements the shared model contract and SVG score preview; see ../CPU_ADAPTER.md. For hosting, place tokenizer.json and config.json alongside the externally supplied ONNX files at baseUrl (default /models). The metadata files are stored at this package root and are not automatically served from /models.

@@ -1,5 +1,7 @@
-"""Contract implemented by the CPU transcription model adapter."""
+"""Public model adapter contract and CPU WebScore loader.
 
+Weights are supplied locally; this module never downloads or trains a model.
+"""
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -20,11 +22,11 @@ class ModelLoadError(Exception):
 
 
 class UnsupportedAudioFormatError(Exception):
-    """The input is a recognized format other than MP3."""
+    """The input is recognized, but is not MP3."""
 
 
 class InvalidAudioError(Exception):
-    """The input could not be identified or decoded."""
+    """The input cannot be identified or decoded."""
 
 
 class InferenceError(Exception):
@@ -32,9 +34,14 @@ class InferenceError(Exception):
 
 
 class ScoreRenderError(Exception):
-    """The predicted notes could not be rendered as a score image."""
+    """The predicted notes could not be rendered."""
 
 
 def load_model(model_dir: Path) -> Transcriber:
-    # The model owner supplies the loader and Transcriber implementation here.
-    raise ModelLoadError(f"CPU model adapter is not configured for {model_dir}")
+    try:
+        from .webscore_cpu import WebScoreTranscriber
+        return WebScoreTranscriber.load(Path(model_dir))
+    except ModelLoadError:
+        raise
+    except Exception as exc:
+        raise ModelLoadError("Could not initialize the local CPU WebScore adapter") from exc
