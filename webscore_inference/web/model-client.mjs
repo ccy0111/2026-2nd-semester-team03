@@ -66,20 +66,35 @@ export class WebScoreClient {
       const cleanBase = baseUrl.replace(/\/+$/, "");
       urls = Object.fromEntries(names.map((name) => [name, `${cleanBase}/${name}`]));
     }
-    const [tokRes, cfgRes] = await Promise.all([
-      fetch(urls["tokenizer.json"]),
-      fetch(urls["config.json"]),
+    // Never propagate provider/network errors containing signed bearer URLs.
+    // Deliberately omit cause as it can also be serialized by application logs.
+    const readMetadata = async (name) => {
+      let response;
+      try {
+        response = await fetch(urls[name]);
+      } catch {
+        throw new Error(`Failed to fetch ${name}: network request failed`);
+      }
+      if (!response.ok) throw new Error(`Failed to fetch ${name}: ${response.status}`);
+      try {
+        return await response.json();
+      } catch {
+        throw new Error(`Invalid model metadata: ${name}`);
+      }
+    };
+    const [tokenizer, arch] = await Promise.all([
+      readMetadata("tokenizer.json"), readMetadata("config.json"),
     ]);
-    if (!tokRes.ok) throw new Error(`Failed to fetch tokenizer.json: ${tokRes.status}`);
-    if (!cfgRes.ok) throw new Error(`Failed to fetch config.json: ${cfgRes.status}`);
-
-    const tokenizer = await tokRes.json();
-    const arch = await cfgRes.json();
     const opts = { executionProviders: ["webgpu", "wasm"] };
+    const loadSession = async (name) => {
+      try {
+        return await ort.InferenceSession.create(urls[name], opts);
+      } catch {
+        throw new Error(`Failed to load ${name}: check access, URL expiry and model compatibility`);
+      }
+    };
     const [encoderSession, embedSession, decoderSession] = await Promise.all([
-      ort.InferenceSession.create(urls["mel_encoder.onnx"], opts),
-      ort.InferenceSession.create(urls["token_embed.onnx"], opts),
-      ort.InferenceSession.create(urls[decFile], opts),
+      loadSession("mel_encoder.onnx"), loadSession("token_embed.onnx"), loadSession(decFile),
     ]);
 
     return new WebScoreClient(ort, { tokenizer, encoderSession, embedSession, decoderSession, arch });

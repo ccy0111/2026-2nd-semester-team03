@@ -226,3 +226,22 @@ test("expired metadata URL reports status without echoing the signature or loadi
     return true;
   });
 });
+
+test("network, parsing and runtime errors cannot escape with signed URLs", async (t) => {
+  const secret = "https://private.example.test/model?X-Amz-Signature=secret-test";
+  const names = ["tokenizer.json", "config.json", "mel_encoder.onnx", "token_embed.onnx", "decoder_kv.int8.onnx"];
+  const modelUrls = Object.fromEntries(names.map((n) => [n, secret]));
+  const assertSafe = (expected) => (err) => {
+    assert.match(err.message, expected);
+    assert.ok(!String(err.stack).includes("secret-test"));
+    assert.equal(err.cause, undefined);
+    return true;
+  };
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => { throw new Error(secret); });
+  await assert.rejects(WebScoreClient.create({}, { modelUrls }), assertSafe(/network request failed/));
+  fetchMock.mock.mockImplementation(async () => ({ ok: true, json: async () => { throw new Error(secret); } }));
+  await assert.rejects(WebScoreClient.create({}, { modelUrls }), assertSafe(/Invalid model metadata/));
+  fetchMock.mock.mockImplementation(async () => ({ ok: true, json: async () => ({}) }));
+  const ort = { InferenceSession: { create: async () => { throw new Error(secret, { cause: new Error(secret) }); } } };
+  await assert.rejects(WebScoreClient.create(ort, { modelUrls }), assertSafe(/Failed to load mel_encoder.onnx/));
+});
