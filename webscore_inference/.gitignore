@@ -1,0 +1,19 @@
+models/*.onnx
+models/*.onnx_data
+models/*.safetensors
+web_uploads/
+node_modules/
+__pycache__/
+*.pyc
+
+# Model artifacts are intentionally excluded from this source-only publication.
+models/
+*.onnx
+*.onnx_data
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+.env
+.env.*

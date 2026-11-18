@@ -1,0 +1,3 @@
+# Optional server-side signing adapter only; never a browser dependency.
+-r requirements.txt
+boto3>=1.34,<2
