@@ -245,3 +245,25 @@ test("network, parsing and runtime errors cannot escape with signed URLs", async
   const ort = { InferenceSession: { create: async () => { throw new Error(secret, { cause: new Error(secret) }); } } };
   await assert.rejects(WebScoreClient.create(ort, { modelUrls }), assertSafe(/Failed to load mel_encoder.onnx/));
 });
+
+test("last partial chunk drops padding notes and clips sustained notes to audio end", async () => {
+  const tok = makeFakeTokenizer(), lookup = buildTokenLookup(tok);
+  const id = x => lookup.eventToId.get(x);
+  const client = new WebScoreClient({}, {tokenizer:tok, arch:{}});
+  client.transcribeChunk = async () => [id('inst:0'),id('vel:1'),id('time:50'),id('pitch:60'),id('time:200'),id('pitch:64'),lookup.eosId];
+  const r = await client.transcribePcm(new Float32Array(16000));
+  assert.equal(r.notes.length, 1);
+  assert.equal(r.notes[0].pitch, 60);
+  assert.equal(r.notes[0].offset, 1);
+});
+
+test("token limit without EOS is an explicit error", async () => {
+ const tok=makeFakeTokenizer();
+ class Tensor {constructor(type,data,dims){Object.assign(this,{type,data,dims});}}
+ const client=new WebScoreClient({Tensor},{tokenizer:tok,arch:{dim:4,num_layers:1,num_heads:1,num_kv_heads:1},
+  encoderSession:{run:async()=>({cond_embeds:new Tensor('float32',new Float32Array(4),[1,1,4])})},
+  embedSession:{run:async()=>({token_embeds:new Tensor('float32',new Float32Array(4),[1,1,4])})},
+  decoderSession:{run:async({inputs_embeds})=>{const n=inputs_embeds.dims[1];const logits=new Float32Array(n*tok.vocab_size).fill(-10);logits[(n-1)*tok.vocab_size+4]=10;return {logits:new Tensor('float32',logits,[1,n,tok.vocab_size]),present_k:new Tensor('float32',new Float32Array(4),[1,1,1,1,4]),present_v:new Tensor('float32',new Float32Array(4),[1,1,1,1,4])};}}
+ });
+ await assert.rejects(client.transcribeChunk(new Float32Array(80000),{maxGenLen:1}),/EOS/);
+});

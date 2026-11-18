@@ -158,14 +158,14 @@ export class WebScoreClient {
       const nextTok = argmaxMasked(lastRow, this.maskedIds);
       generated.push(nextTok);
 
-      if (nextTok === this.lookup.eosId) break;
+      if (nextTok === this.lookup.eosId) return generated;
 
       const nextIdTensor = new this.ort.Tensor("int64", BigInt64Array.from([BigInt(nextTok)]), [1, 1]);
       const nextEmb = await this.embedSession.run({ input_ids: nextIdTensor });
       stepEmbeds = nextEmb.token_embeds;
     }
 
-    return generated;
+    throw new Error("Model did not emit EOS within the per-chunk token limit");
   }
 
   async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null } = {}) {
@@ -186,9 +186,13 @@ export class WebScoreClient {
       if (onProgress) onProgress({ completedChunks: idx + 1, totalChunks: chunks.length });
     }
 
-    allNotes.push(...finalizeOpenNotes(openNotes, chunks.length * 5.0));
-    const midiBytes = encodeNotesToMidi(allNotes);
-    return { notes: allNotes, midiBytes, tokensByChunk };
+    const endSec = pcm16k.length / 16000;
+    allNotes.push(...finalizeOpenNotes(openNotes, endSec));
+    // The final encoder input is padded to five seconds, but output must not be.
+    const notes = allNotes.filter(n => n.onset >= 0 && n.onset < endSec)
+      .map(n => ({ ...n, offset: Math.min(n.offset, endSec) }));
+    const midiBytes = encodeNotesToMidi(notes);
+    return { notes, midiBytes, tokensByChunk };
   }
 
   async transcribeAudio(audioInput, opts = {}) {
