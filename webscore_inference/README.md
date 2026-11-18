@@ -151,3 +151,11 @@ scratch buffers. This arithmetic-preserving optimization is enabled normally;
 regression tests compare sparse and dense summation exactly and check buffer
 reset across noise/tone/silence. It changes preprocessing cost, not the learned
 model, chunk boundary accuracy, or predicted instrument identity.
+
+## Current public CDN deployment
+
+Use `createDeployedModel` from `web/deployed-model.mjs` for the deployed INT8 model
+and automatic version updates. It contains the actual public manifest URL and
+selects WASM by default. See [PUBLIC_MODEL_CDN.md](../docs/PUBLIC_MODEL_CDN.md).
+The earlier private-R2 setup remains an optional alternative, not a requirement
+for this public CDN entry point. No UI is wired automatically by this package.
