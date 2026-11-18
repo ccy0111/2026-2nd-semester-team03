@@ -45,11 +45,30 @@ export class WebScoreClient {
     this.maskedIds = new Set([this.lookup.padId, this.lookup.bosId, this.lookup.unkId]);
   }
 
-  static async create(ort, { baseUrl = "/models", useInt8 = true } = {}) {
-    const cleanBase = baseUrl.replace(/\/+$/, "");
+  static async create(ort, { baseUrl = "/models", useInt8 = true, modelUrls = null } = {}) {
+    const decFile = useInt8 ? "decoder_kv.int8.onnx" : "decoder_kv.onnx";
+    const names = ["tokenizer.json", "config.json", "mel_encoder.onnx", "token_embed.onnx", decFile];
+    // Private buckets supply independently signed URLs. Never append paths to
+    // a signed URL or silently fall back to an unauthenticated public URL.
+    let urls;
+    if (modelUrls !== null) {
+      urls = Object.fromEntries(names.map((name) => {
+        const url = modelUrls?.[name];
+        if (typeof url !== "string" || !url.trim()) {
+          throw new Error(`Missing model URL for ${name}`);
+        }
+        return [name, url];
+      }));
+    } else {
+      if (typeof baseUrl !== "string" || !baseUrl.trim() || /[?#]/.test(baseUrl)) {
+        throw new Error("baseUrl must be a directory URL without query or fragment; use modelUrls for signed URLs.");
+      }
+      const cleanBase = baseUrl.replace(/\/+$/, "");
+      urls = Object.fromEntries(names.map((name) => [name, `${cleanBase}/${name}`]));
+    }
     const [tokRes, cfgRes] = await Promise.all([
-      fetch(`${cleanBase}/tokenizer.json`),
-      fetch(`${cleanBase}/config.json`),
+      fetch(urls["tokenizer.json"]),
+      fetch(urls["config.json"]),
     ]);
     if (!tokRes.ok) throw new Error(`Failed to fetch tokenizer.json: ${tokRes.status}`);
     if (!cfgRes.ok) throw new Error(`Failed to fetch config.json: ${cfgRes.status}`);
@@ -57,12 +76,10 @@ export class WebScoreClient {
     const tokenizer = await tokRes.json();
     const arch = await cfgRes.json();
     const opts = { executionProviders: ["webgpu", "wasm"] };
-    const decFile = useInt8 ? "decoder_kv.int8.onnx" : "decoder_kv.onnx";
-
     const [encoderSession, embedSession, decoderSession] = await Promise.all([
-      ort.InferenceSession.create(`${cleanBase}/mel_encoder.onnx`, opts),
-      ort.InferenceSession.create(`${cleanBase}/token_embed.onnx`, opts),
-      ort.InferenceSession.create(`${cleanBase}/${decFile}`, opts),
+      ort.InferenceSession.create(urls["mel_encoder.onnx"], opts),
+      ort.InferenceSession.create(urls["token_embed.onnx"], opts),
+      ort.InferenceSession.create(urls[decFile], opts),
     ]);
 
     return new WebScoreClient(ort, { tokenizer, encoderSession, embedSession, decoderSession, arch });

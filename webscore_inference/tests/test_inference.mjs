@@ -173,3 +173,56 @@ test("MIDI export rejects excess melodic instruments rather than dropping notes"
   const midi = encodeNotesToMidi(supported);
   assert.equal(new DataView(midi.buffer).getUint16(10), 17); // tempo + all 16 tracks
 });
+
+test("model loading supports base directories and private per-file signed URLs", async (t) => {
+  const tok = makeFakeTokenizer();
+  const config = { dim: 8, num_layers: 2, num_heads: 4, num_kv_heads: 2 };
+  const requests = [];
+  const sessions = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    requests.push(url);
+    return { ok: true, json: async () => url.includes("tokenizer.json") ? tok : config };
+  });
+  const ort = { InferenceSession: { create: async (url, options) => {
+    sessions.push({ url, options });
+    return {};
+  } } };
+  await WebScoreClient.create(ort, { baseUrl: "https://models.example.test/piano/step-36000///" });
+  assert.deepEqual(requests, [
+    "https://models.example.test/piano/step-36000/tokenizer.json",
+    "https://models.example.test/piano/step-36000/config.json",
+  ]);
+  assert.deepEqual(sessions.map((s) => s.url), [
+    "https://models.example.test/piano/step-36000/mel_encoder.onnx",
+    "https://models.example.test/piano/step-36000/token_embed.onnx",
+    "https://models.example.test/piano/step-36000/decoder_kv.int8.onnx",
+  ]);
+  requests.length = sessions.length = 0;
+  const names = ["tokenizer.json", "config.json", "mel_encoder.onnx", "token_embed.onnx", "decoder_kv.onnx"];
+  const modelUrls = Object.fromEntries(names.map((name, i) => [name,
+    `https://private.example.test/bucket/${name}?X-Amz-Signature=test%2B${i}&X-Amz-Expires=900`]));
+  await WebScoreClient.create(ort, { modelUrls, useInt8: false });
+  assert.deepEqual(requests, names.slice(0, 2).map((n) => modelUrls[n]));
+  assert.deepEqual(sessions.map((s) => s.url), names.slice(2).map((n) => modelUrls[n]));
+  assert.ok(sessions.every((s) => s.options.executionProviders.join() === "webgpu,wasm"));
+});
+
+test("missing signed URLs fail before network access without public fallback", async (t) => {
+  t.mock.method(globalThis, "fetch", () => { throw new Error("Unexpected network request"); });
+  await assert.rejects(WebScoreClient.create({}, { modelUrls: {
+    "tokenizer.json": "https://private.example.test/tokenizer.json?signature=test",
+  } }), /Missing model URL for config.json/);
+  await assert.rejects(WebScoreClient.create({}, { baseUrl: "https://private.example.test/model?signature=test" }), /use modelUrls/);
+  await assert.rejects(WebScoreClient.create({}, { baseUrl: "" }), /baseUrl must/);
+});
+
+test("expired metadata URL reports status without echoing the signature or loading weights", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => ({ ok: false, status: 403 }));
+  const names = ["tokenizer.json", "config.json", "mel_encoder.onnx", "token_embed.onnx", "decoder_kv.int8.onnx"];
+  const modelUrls = Object.fromEntries(names.map((n) => [n, `https://private.example.test/${n}?signature=secret-test`]));
+  await assert.rejects(WebScoreClient.create({}, { modelUrls }), (err) => {
+    assert.equal(err.message, "Failed to fetch tokenizer.json: 403");
+    assert.ok(!err.message.includes("secret-test"));
+    return true;
+  });
+});
