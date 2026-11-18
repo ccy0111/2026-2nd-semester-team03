@@ -32,12 +32,14 @@ function validateClient(client) {
       ![['padId','pad_token_id'],['bosId','bos_token_id'],['eosId','eos_token_id'],['unkId','unk_token_id']].every(([k,v]) => l[k] === a[v] && Number.isInteger(l[k]) && l[k] >= 0 && l[k] < a.card)) {
     throw new Error('Incompatible model metadata');
   }
+  const special = ['padId', 'bosId', 'eosId', 'unkId'];
+  if (new Set(special.map(k => l[k])).size !== 4 || !special.every(k => l.idToEvent[l[k]]?.kind === `<${k.slice(0, -2)}>`)) throw new Error('Incompatible special tokens');
   const contracts = [
     [client.encoderSession, ['mel'], ['cond_embeds']],
     [client.embedSession, ['input_ids'], ['token_embeds']],
     [client.decoderSession, ['inputs_embeds','past_k','past_v','position_offset','attn_mask'], ['logits','present_k','present_v']],
   ];
-  if (!contracts.every(([s,ins,outs]) => s && ins.every(n=>s.inputNames?.includes(n)) && outs.every(n=>s.outputNames?.includes(n)))) {
+  if (!contracts.every(([s,ins,outs]) => s && s.inputNames?.length === ins.length && ins.every(n=>s.inputNames?.includes(n)) && outs.every(n=>s.outputNames?.includes(n)))) {
     throw new Error('Incompatible model interface');
   }
 }
@@ -52,7 +54,7 @@ export class VersionedWebScoreClient {
   }
 
   constructor(ort, { manifestUrl, clientOptions = {}, pollIntervalMs = 60000,
-    checkBeforeInference = true, onUpdate = null, onUpdateError = null,
+    checkBeforeInference = true, manifestTimeoutMs = 15000, onUpdate = null, onUpdateError = null,
     fetchImpl = globalThis.fetch, clientFactory = WebScoreClient.create.bind(WebScoreClient) } = {}) {
     const base = globalThis.location?.href;
     let parsed;
@@ -60,6 +62,8 @@ export class VersionedWebScoreClient {
     if (!manifestUrl || (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(parsed.hostname))) || parsed.username || parsed.password || parsed.hash) throw new Error('Invalid manifest URL');
     if (!Number.isFinite(pollIntervalMs) || (pollIntervalMs !== 0 && pollIntervalMs < 1000)) throw new Error('Polling interval must be zero or at least 1000ms');
     if (['baseUrl','modelUrls','useInt8'].some(k => k in clientOptions)) throw new Error('Model locations and precision must come from the manifest');
+    if (!Number.isFinite(manifestTimeoutMs) || manifestTimeoutMs <= 0) throw new Error('Manifest timeout must be positive');
+    this.manifestTimeoutMs = manifestTimeoutMs;
     this.ort = ort;
     this.manifestUrl = parsed.href;
     this.clientOptions = { ...clientOptions };
@@ -85,17 +89,30 @@ export class VersionedWebScoreClient {
 
   _notify(callback, value) {
     // User callbacks must not turn a committed update into an apparent failure.
-    try { callback?.(value); } catch { /* callback failures are isolated */ }
+    try { Promise.resolve(callback?.(value)).catch(() => {}); } catch { /* callback failures are isolated */ }
   }
 
   async _update() {
     let manifest;
+    const controller = new AbortController();
+    let timer;
     try {
-      const response = await this.fetchImpl(this.manifestUrl, { cache: 'no-store', credentials: 'same-origin' });
-      if (!response.ok) throw new Error('Manifest request failed');
-      manifest = parseManifest(await response.json(), this.manifestUrl);
+      const request = (async () => {
+        const response = await this.fetchImpl(this.manifestUrl, { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
+        if (!response.ok) throw new Error('Manifest request failed');
+        return parseManifest(await response.json(), this.manifestUrl);
+      })();
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('Manifest request timed out'));
+        }, this.manifestTimeoutMs);
+      });
+      manifest = await Promise.race([request, timeout]);
     } catch {
       throw new Error('Unable to read a compatible model manifest');
+    } finally {
+      clearTimeout(timer);
     }
     if (manifest.version === this.modelVersion) return { updated: false, version: this.modelVersion };
     let replacement;

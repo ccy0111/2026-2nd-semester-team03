@@ -53,6 +53,9 @@ web app. That server integration is outside this model-only change.
 
 ## Update behavior
 
+- Manifest requests (including JSON parsing) have a 15-second timeout by default;
+  set `manifestTimeoutMs` to change it. Timed-out fetches are aborted and cannot
+  block the queue indefinitely. This does not cancel ORT session loading.
 - Checks once during creation, every 60 seconds by default, and before inference.
   Set polling to `0` to disable background checks; manual `checkForUpdate()` is also
   available. This is polling, not instant server push.

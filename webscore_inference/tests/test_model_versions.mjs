@@ -9,7 +9,7 @@ function harness(extra = {}) {
     fetchImpl: async (url, opts) => { state.calls.push(opts); if (state.failFetch) throw new Error(url); return { ok: true, json: async () => state.current }; },
     clientFactory: async (_, opts) => {
       if (state.failLoad) throw new Error(opts.modelUrls['config.json']);
-      const client = { arch: { model_type:'webscore-gqa',sample_rate:16000,n_fft:2048,frame_rate:100,n_mel_bins:512,dim:4,num_layers:1,num_heads:2,num_kv_heads:1,card:4,pad_token_id:0,bos_token_id:1,eos_token_id:2,unk_token_id:3 }, lookup:{idToEvent:Array(4),padId:0,bosId:1,eosId:2,unkId:3}, encoderSession:{inputNames:['mel'],outputNames:['cond_embeds']}, embedSession:{inputNames:['input_ids'],outputNames:['token_embeds']}, decoderSession:{inputNames:['inputs_embeds','past_k','past_v','position_offset','attn_mask'],outputNames:['logits','present_k','present_v']}, opts, disposed: false, transcribePcm: async () => opts.modelUrls['config.json'], transcribeAudio: async () => 'audio', dispose: async () => { client.disposed = true; } };
+      const client = { arch: { model_type:'webscore-gqa',sample_rate:16000,n_fft:2048,frame_rate:100,n_mel_bins:512,dim:4,num_layers:1,num_heads:2,num_kv_heads:1,card:4,pad_token_id:0,bos_token_id:1,eos_token_id:2,unk_token_id:3 }, lookup:{idToEvent:['<pad>','<bos>','<eos>','<unk>'].map(kind=>({kind})),padId:0,bosId:1,eosId:2,unkId:3}, encoderSession:{inputNames:['mel'],outputNames:['cond_embeds']}, embedSession:{inputNames:['input_ids'],outputNames:['token_embeds']}, decoderSession:{inputNames:['inputs_embeds','past_k','past_v','position_offset','attn_mask'],outputNames:['logits','present_k','present_v']}, opts, disposed: false, transcribePcm: async () => opts.modelUrls['config.json'], transcribeAudio: async () => 'audio', dispose: async () => { client.disposed = true; } };
       state.clients.push(client); return client;
     }, ...extra };
   return { state, options };
@@ -78,4 +78,30 @@ test('automatic polling notices new version and can roll back to an older publis
     state.current=manifest('v2'); await new Promise(r=>setTimeout(r,1100)); assert.equal(client.modelVersion,'v2');
     state.current=manifest('v1'); await client.checkForUpdate(); assert.equal(client.modelVersion,'v1');
   } finally { await client.dispose(); }
+});
+test('hung manifest times out and aborts without blocking subsequent inference or disposal', async () => {
+  const {state,options}=harness({manifestTimeoutMs:20}); const client=await VersionedWebScoreClient.create({},options);
+  let signal; client.fetchImpl=async(_,opts)=>{ signal=opts.signal; return new Promise(()=>{}); };
+  await assert.rejects(client.checkForUpdate(),/compatible model manifest/); assert.equal(signal.aborted,true);
+  assert.match(await client.transcribePcm([]),/\/v1\//); await client.dispose();
+});
+test('dispose really waits for active and queued inference and then rejects new work', async () => {
+  const {state,options}=harness({checkBeforeInference:false}); const client=await VersionedWebScoreClient.create({},options);
+  let finish, started; const start=new Promise(r=>started=r); let calls=0;
+  state.clients[0].transcribePcm=async()=>{ if (++calls===1) { started(); await new Promise(r=>finish=r); } return calls; };
+  const first=client.transcribePcm([]); await start; const second=client.transcribePcm([]); const disposal=client.dispose();
+  assert.equal(state.clients[0].disposed,false); await assert.rejects(client.transcribePcm([]),/disposed/);
+  finish(); await first; await second; await disposal; assert.equal(calls,2); assert.equal(state.clients[0].disposed,true);
+});
+test('async update callback rejections are isolated', async () => {
+  const {options}=harness({onUpdate:async()=>{throw new Error('private callback error');}});
+  const client=await VersionedWebScoreClient.create({},options); await new Promise(r=>setImmediate(r)); await client.dispose();
+});
+test('extra required inputs and incorrect special tokens reject the replacement', async () => {
+  for (const corrupt of [c=>c.decoderSession.inputNames.push('extra'), c=>c.lookup.idToEvent[1].kind='<eos>', c=>{c.arch.eos_token_id=1;c.lookup.eosId=1;}]) {
+    const {state,options}=harness(); const factory=options.clientFactory;
+    options.clientFactory=async(...args)=>{const c=await factory(...args);if(state.current.version==='v2')corrupt(c);return c;};
+    const client=await VersionedWebScoreClient.create({},options); state.current=manifest('v2'); await assert.rejects(client.checkForUpdate());
+    assert.equal(client.modelVersion,'v1'); assert.equal(state.clients[1].disposed,true); await client.dispose();
+  }
 });
