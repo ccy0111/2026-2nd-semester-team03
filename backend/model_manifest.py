@@ -1,7 +1,7 @@
-"""Opt-in, fail-closed manifest router. Never registered by the default app.
+"""Model URL manifests for browser inference, with optional private-R2 signing.
 
-The host must provide its own authenticated-session/authorization hook. Credentials
-remain in server environment variables. This module does not implement login.
+The MVP app exposes load_runtime_manifest() through its public manifest endpoint.
+Hosts that add authentication may use create_model_manifest_router() instead.
 """
 import inspect
 import json
@@ -9,6 +9,8 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable
+from urllib.parse import urljoin, urlsplit
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -17,6 +19,92 @@ from starlette.concurrency import run_in_threadpool
 HEADERS = {"Cache-Control": "no-store, private", "Pragma": "no-cache", "Vary": "Cookie, Authorization"}
 CATALOG_LIMIT = 64 * 1024
 BASE_FILES = ("config.json", "tokenizer.json", "mel_encoder.onnx", "token_embed.onnx")
+VERSION_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+DEFAULT_MANIFEST_URL = "https://models.midistudio.app/web-student-kd/current.json"
+
+
+def validate_model_url(value, *, allow_query=True):
+    if not isinstance(value, str) or not value:
+        raise ValueError("Model URL must be a nonempty string")
+    url = urlsplit(value)
+    local = url.hostname in ("localhost", "127.0.0.1", "::1")
+    if (
+        not url.hostname
+        or not (url.scheme == "https" or (local and url.scheme == "http"))
+        or url.username is not None
+        or url.password is not None
+        or url.fragment
+        or (url.query and not allow_query)
+        or any(character.isspace() for character in value)
+        or "\\" in value
+        or (url.port is not None and url.port < 1)
+    ):
+        raise ValueError("Invalid model URL")
+    return value
+
+
+def load_cdn_manifest(url):
+    request = UrlRequest(
+        validate_model_url(url),
+        headers={"Accept": "application/json", "Cache-Control": "no-cache", "User-Agent": "MidiStudio/1.0"},
+    )
+    with urlopen(request, timeout=5) as response:
+        source_url = validate_model_url(response.geturl())
+        raw = response.read(CATALOG_LIMIT + 1)
+    if len(raw) > CATALOG_LIMIT:
+        raise ValueError("Model manifest too large")
+    value = json.loads(raw)
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1 or value.get("format") != "webscore-onnx-v1":
+        raise ValueError("Invalid model manifest")
+    version, precision = value.get("version"), value.get("precision")
+    if not isinstance(version, str) or not re.fullmatch(VERSION_PATTERN, version) or ".." in version or precision not in ("int8", "fp32"):
+        raise ValueError("Invalid model version or precision")
+    decoder = "decoder_kv.int8.onnx" if precision == "int8" else "decoder_kv.onnx"
+    names = (*BASE_FILES, decoder)
+    files = value.get("files")
+    if not isinstance(files, dict) or set(files) != set(names):
+        raise ValueError("Incomplete model manifest")
+    urls = {}
+    for name in names:
+        if not isinstance(files[name], str) or not files[name]:
+            raise ValueError("Invalid model file URL")
+        urls[name] = validate_model_url(urljoin(source_url, files[name]))
+    return {"schemaVersion": 1, "format": "webscore-onnx-v1", "version": version,
+            "precision": precision, "files": urls}
+
+
+def load_runtime_manifest():
+    """Return one model version's URLs using server-side deployment settings."""
+    source = os.getenv("MODEL_SOURCE", "manifest")
+    if source == "manifest":
+        return load_cdn_manifest(os.getenv("MODEL_MANIFEST_URL", DEFAULT_MANIFEST_URL))
+    if source == "cdn":
+        base_url = os.environ["MODEL_BASE_URL"].rstrip("/")
+        version = os.environ["MODEL_VERSION"]
+        precision = os.getenv("MODEL_PRECISION", "int8")
+        validate_model_url(base_url, allow_query=False)
+        if (
+            not re.fullmatch(VERSION_PATTERN, version)
+            or ".." in version
+            or precision not in ("int8", "fp32")
+        ):
+            raise ValueError("Invalid model version or precision")
+        decoder = "decoder_kv.int8.onnx" if precision == "int8" else "decoder_kv.onnx"
+        return {
+            "schemaVersion": 1,
+            "format": "webscore-onnx-v1",
+            "version": version,
+            "precision": precision,
+            "files": {name: f"{base_url}/{name}" for name in (*BASE_FILES, decoder)},
+        }
+    if source == "r2":
+        settings = ManifestSettings.from_env()
+        client = make_r2_client(settings)
+        try:
+            return ModelManifestService(settings, client).runtime_manifest()
+        finally:
+            client.close()
+    raise ValueError("MODEL_SOURCE must be manifest, cdn or r2")
 
 
 @dataclass(frozen=True)
@@ -74,7 +162,7 @@ def validate_catalog(value, settings):
     if not isinstance(value, dict) or value.get("schemaVersion") != 1 or value.get("format") != "webscore-onnx-v1":
         raise ValueError("Invalid model catalog")
     version, precision = value.get("version"), value.get("precision")
-    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", version) or ".." in version or precision not in ("int8", "fp32"):
+    if not isinstance(version, str) or not re.fullmatch(VERSION_PATTERN, version) or ".." in version or precision not in ("int8", "fp32"):
         raise ValueError("Invalid model release")
     names = BASE_FILES + (("decoder_kv.int8.onnx" if precision == "int8" else "decoder_kv.onnx"),)
     files = value.get("files")

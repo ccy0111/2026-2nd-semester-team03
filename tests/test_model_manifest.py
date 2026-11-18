@@ -6,7 +6,8 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.model_manifest import (ManifestSettings, ModelManifestService,
-                                    create_model_manifest_router, validate_catalog)
+                                    DEFAULT_MANIFEST_URL, create_model_manifest_router,
+                                    load_runtime_manifest, validate_catalog)
 
 SETTINGS = ManifestSettings(account_id='a'*32, bucket='midi-course-checkpoints')
 
@@ -16,7 +17,8 @@ def catalog():
                 files={n:dict(key=f'web-student-kd/releases/v1/{n}',size=123,sha256='a'*64) for n in names})
 
 class FakeS3:
-    def __init__(self): self.catalog=catalog(); self.calls=[]; self.fail=False
+    def __init__(self): self.catalog=catalog(); self.calls=[]; self.fail=False; self.closed=False
+    def close(self): self.closed=True
     def get_object(self,**kwargs):
         self.calls.append(('get',kwargs))
         if self.fail: raise RuntimeError('https://secret?signature=LEAK')
@@ -40,9 +42,35 @@ class ManifestTests(unittest.TestCase):
         def deny(request):raise RuntimeError('secret')
         response=self.client(deny).get('/api/model-manifest')
         self.assertEqual(response.status_code,403);self.assertNotIn('secret',response.text)
-    def test_default_app_has_no_manifest_route(self):
+    def test_default_app_provides_manifest_route(self):
         from backend.main import create_app
-        self.assertNotIn('/api/model-manifest',[getattr(r,'path',None) for r in create_app().routes])
+        self.assertIn('/api/model-manifest',[getattr(r,'path',None) for r in create_app().routes])
+    def test_r2_deployment_uses_existing_signer_and_closes_client(self):
+        with patch.dict('os.environ',{'MODEL_SOURCE':'r2'},clear=True), \
+             patch('backend.model_manifest.ManifestSettings.from_env',return_value=SETTINGS), \
+             patch('backend.model_manifest.make_r2_client',return_value=self.s3):
+            result=load_runtime_manifest()
+        self.assertEqual(result['version'],'v1')
+        self.assertEqual(len(result['files']),5)
+        self.assertTrue(self.s3.closed)
+    def test_r2_provider_failure_still_closes_client(self):
+        self.s3.fail=True
+        with patch.dict('os.environ',{'MODEL_SOURCE':'r2'},clear=True), \
+             patch('backend.model_manifest.ManifestSettings.from_env',return_value=SETTINGS), \
+             patch('backend.model_manifest.make_r2_client',return_value=self.s3):
+            with self.assertRaises(RuntimeError):load_runtime_manifest()
+        self.assertTrue(self.s3.closed)
+    def test_default_app_serves_r2_manifest_for_browser(self):
+        from backend.main import create_app
+        with patch.dict('os.environ',{'MODEL_SOURCE':'r2'},clear=True), \
+             patch('backend.model_manifest.ManifestSettings.from_env',return_value=SETTINGS), \
+             patch('backend.model_manifest.make_r2_client',return_value=self.s3):
+            with TestClient(create_app()) as client:
+                response=client.get('/api/model-manifest')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['files']['config.json'],
+                         'https://example.test/web-student-kd/releases/v1/config.json?signature=TEST_ONLY')
+        self.assertTrue(self.s3.closed)
     def test_authorized_response_fixed_objects_and_no_store(self):
         response=self.client(lambda request:True).get('/api/model-manifest?key=other&bucket=other')
         self.assertEqual(response.status_code,200);self.assertEqual(response.json()['version'],'v1')
@@ -84,5 +112,89 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(ValueError):ManifestSettings(account_id='a'*32,bucket='abc',release_prefix='../oops')
         with patch.dict('os.environ',{},clear=True):
             with self.assertRaisesRegex(ValueError,'settings'):ManifestSettings.from_env()
+
+class CdnManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict('os.environ', {}, clear=True))
+        self.manifest = {
+            'schemaVersion': 1, 'format': 'webscore-onnx-v1',
+            'version': 'v1', 'precision': 'int8',
+            'files': {name: f'https://models.example.com/releases/v1/{name}'
+                      for name in catalog()['files']},
+        }
+
+    def response_body(self, value):
+        body = io.BytesIO(json.dumps(value).encode())
+        body.geturl = lambda: DEFAULT_MANIFEST_URL
+        return body
+
+    def test_default_api_reads_published_manifest(self):
+        from backend.main import create_app
+        body = self.response_body(self.manifest)
+        with patch('backend.model_manifest.urlopen', return_value=body) as fetch:
+            with TestClient(create_app()) as client:
+                response = client.get('/api/model-manifest')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), self.manifest)
+        request = fetch.call_args.args[0]
+        self.assertEqual(request.full_url, DEFAULT_MANIFEST_URL)
+        self.assertEqual(request.get_header('User-agent'), 'MidiStudio/1.0')
+        self.assertEqual(fetch.call_args.kwargs['timeout'], 5)
+        self.assertTrue(body.closed)
+
+    def test_configured_manifest_url_and_new_version_are_followed(self):
+        changed = dict(self.manifest, version='v2')
+        changed['files'] = {name: url.replace('/v1/', '/v2/')
+                            for name, url in self.manifest['files'].items()}
+        responses = [self.response_body(self.manifest), self.response_body(changed)]
+        with patch.dict('os.environ', {'MODEL_MANIFEST_URL': 'https://models.example.com/current.json'}):
+            with patch('backend.model_manifest.urlopen', side_effect=responses) as fetch:
+                self.assertEqual(load_runtime_manifest()['version'], 'v1')
+                self.assertEqual(load_runtime_manifest()['version'], 'v2')
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(fetch.call_args.args[0].full_url, 'https://models.example.com/current.json')
+
+    def test_relative_urls_resolve_at_upstream_manifest(self):
+        self.manifest['files'] = {name: f'./releases/v1/{name}' for name in self.manifest['files']}
+        with patch('backend.model_manifest.urlopen', return_value=self.response_body(self.manifest)):
+            result = load_runtime_manifest()
+        self.assertEqual(result['files']['config.json'],
+                         'https://models.midistudio.app/web-student-kd/releases/v1/config.json')
+
+    def test_invalid_or_partial_upstream_manifest_is_rejected(self):
+        mutations = [
+            lambda value: value.update(schemaVersion=2),
+            lambda value: value.update(precision='fp16'),
+            lambda value: value['files'].pop('mel_encoder.onnx'),
+            lambda value: value['files'].update({'config.json': None}),
+            lambda value: value['files'].update({'config.json': 'http://models.example.com/config.json'}),
+        ]
+        from backend.main import create_app
+        for mutate in mutations:
+            value = json.loads(json.dumps(self.manifest))
+            mutate(value)
+            with self.subTest(value=value):
+                with patch('backend.model_manifest.urlopen', return_value=self.response_body(value)):
+                    with TestClient(create_app()) as client:
+                        response = client.get('/api/model-manifest')
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json()['error']['code'], 'MODEL_MANIFEST_UNAVAILABLE')
+
+    def test_remote_manifest_size_is_bounded(self):
+        self.manifest['padding'] = 'x' * 65536
+        body = self.response_body(self.manifest)
+        with patch('backend.model_manifest.urlopen', return_value=body):
+            with self.assertRaisesRegex(ValueError, 'too large'):
+                load_runtime_manifest()
+        self.assertTrue(body.closed)
+
+    def test_remote_timeout_has_documented_api_error(self):
+        from backend.main import create_app
+        with patch('backend.model_manifest.urlopen', side_effect=TimeoutError('SECRET')):
+            with TestClient(create_app()) as client:
+                response = client.get('/api/model-manifest')
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('SECRET', response.text)
+
 
 if __name__=='__main__': unittest.main()

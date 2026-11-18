@@ -1,5 +1,2 @@
 fastapi
-python-multipart
 uvicorn
-numpy>=1.26,<3
-onnxruntime>=1.18,<2

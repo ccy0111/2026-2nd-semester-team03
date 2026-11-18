@@ -1,113 +1,138 @@
 # 채보 플랫폼 MVP API
 
-브라우저는 화면을 제공한 로컬 FastAPI 서버에 MP3 한 개를 전송한다. 서버는 사용자 PC의 CPU에서 채보를 완료한 뒤, 같은 서버에서 채보 이미지와 MP3를 받을 수 있는 URL을 반환한다. 이 문서는 [MVP 요구사항](MVP_REQUIREMENTS.md)의 요청·응답과 실패 시 복구 동작을 정의한다.
+브라우저가 CDN에서 모델을 직접 다운로드해 음원을 처리한다. 백엔드는 화면, JavaScript 추론 모듈, 모델 다운로드 정보를 제공한다. 이 문서는 [MVP 요구사항](MVP_REQUIREMENTS.md)에 따른 HTTP API와 프론트엔드·모델 간 JavaScript 인터페이스를 정의한다.
 
 ## 담당자와 구현 위치
 
 | 담당 에이전트 | 구현 위치 | 담당 작업 |
 | --- | --- | --- |
-| 프론트엔드 | `frontend/` | 파일 선택·제출 화면을 만들고, 처리 중 상태와 결과를 표시한다. 응답의 이미지 URL과 다운로드 URL을 화면에 연결하고, `index.html`과 정적 자산을 제공할 위치를 정한다. |
-| 백엔드 | `backend/main.py` | 화면과 API를 제공한다. 업로드 파일을 저장하고 모델을 호출한 뒤, 이미지와 원본 MP3를 결과 URL에서 제공한다. |
-| 모델 | `backend/transcription.py`, `models/` | 팀에서 제공한 모델 파일을 `models/`에 배치하고, 모델 로딩·음원 전처리·CPU 추론·채보 이미지 생성을 구현한다. |
+| 프론트엔드 | `frontend/` | 파일 선택, 모델 준비·채보 상태 표시, 추론 호출, 음표의 이미지 렌더링, 원본 MP3 다운로드를 구현한다. |
+| 백엔드 | `backend/main.py`, `backend/model_manifest.py` | 화면·정적 파일·추론 모듈을 제공하고 모델 파일의 URL 목록을 반환한다. |
+| 모델 | `webscore_inference/web/`, CDN 버전 경로 | 음원 전처리, 브라우저 추론, 토큰 해석과 음표 반환을 구현한다. 같은 export의 모델 파일을 CDN에 배포하고 버전 정보를 전달한다. |
 
-## 브라우저와 백엔드 간 HTTP API
+## HTTP API
 
-서버 진입점은 `backend.main:app`으로 두고, 저장소 루트에서 `uvicorn backend.main:app --host 127.0.0.1 --port 8000`으로 실행한다. 프론트엔드는 현재 페이지와 같은 호스트·포트로 요청한다.
+저장소 루트에서 `uvicorn backend.main:app --host 127.0.0.1 --port 8000`으로 실행한다. 브라우저 클라이언트는 기본 설정의 CDN `current.json`을 직접 조회한다. 서버에서 URL을 발급하는 배포에서는 클라이언트의 `manifestUrl`에 `/api/model-manifest`를 지정한다.
 
-FastAPI에 제공할 프론트엔드 디렉터리는 `FRONTEND_DIR` 환경 변수로 지정하며 기본값은 `frontend/`다. 상대 경로는 저장소 루트를 기준으로 해석한다. React·TypeScript를 Vite로 빌드하는 경우 `FRONTEND_DIR=frontend/dist`로 지정하고, 빌드의 `base`를 `/static/`으로 설정한다. 프론트엔드의 API 호출에는 `/api/`로 시작하는 경로를 사용한다. [Vite 공식 문서](https://vite.dev/guide/build.html#public-base-path)
+`FRONTEND_DIR`은 제공할 프론트엔드 디렉터리다. 기본값은 `frontend/`이며 상대 경로는 저장소 루트 기준이다. Vite를 사용하면 `FRONTEND_DIR=frontend/dist`, 빌드 `base=/static/`으로 설정한다.
 
-| 메서드와 경로 | 요청 | 성공 응답 | 구현 담당 | 프론트엔드 사용 방식 |
-| --- | --- | --- | --- | --- |
-| `GET /` | 본문 없음 | `200 OK`, `text/html`로 지정된 프론트엔드 디렉터리의 `index.html` 제공 | 백엔드가 경로 제공, 프론트엔드가 HTML 작성 또는 빌드 | 사용자가 로컬 주소에서 화면을 연다. |
-| `GET /static/{path}` | 지정된 프론트엔드 디렉터리 기준의 자산 경로 | `200 OK`, 해당 정적 파일 | 백엔드가 지정된 프론트엔드 디렉터리를 `/static`에 마운트, 프론트엔드가 자산 작성 또는 빌드 | HTML은 JS·CSS 등 정적 자산을 `/static/` 아래 경로로 참조한다. |
-| `POST /api/transcriptions` | `multipart/form-data`의 `file` 필드에 MP3 파일 한 개 | `200 OK`, `application/json`으로 `image_url`, `download_url` 반환 | 백엔드가 업로드·모델 호출·결과 저장 구현, 프론트엔드가 제출 요청 구현 | `FormData`의 `file`에 파일을 넣어 `fetch`로 전송한다. 응답을 기다리는 동안 처리 중 상태를 표시하고 제출 버튼을 비활성화한다. |
-| `GET /api/transcriptions/{id}/score` | `image_url`에 포함된 작업 ID | `200 OK`, `image/png` 또는 `image/svg+xml` 이미지 바이트 | 백엔드가 파일 응답 구현, 모델 에이전트가 이미지 생성 | `image_url`을 `fetch`로 조회한다. 성공한 이미지의 `Blob`을 객체 URL로 만들어 `<img>`에 표시한다. |
-| `GET /api/transcriptions/{id}/audio.mp3` | `download_url`에 포함된 작업 ID | `200 OK`, `audio/mpeg`로 업로드한 원본 바이트 반환. 헤더는 `Content-Disposition: attachment; filename="audio.mp3"`. | 백엔드가 파일 응답 구현, 프론트엔드가 다운로드 동작 구현 | 버튼을 누르면 `download_url`을 `fetch`로 조회한다. 성공한 MP3의 `Blob`을 객체 URL로 만들어 `audio.mp3`로 내려받게 한다. |
+| 메서드와 경로 | 요청 | 성공 응답 | 구현 담당과 사용 방식 |
+| --- | --- | --- | --- |
+| `GET /` | 본문 없음 | `200 OK`, `text/html`로 프론트엔드 디렉터리의 `index.html` | 백엔드가 경로를 제공하고 프론트엔드가 HTML을 작성하거나 빌드한다. |
+| `GET /static/{path}` | JS·CSS 등 자산 경로 | `200 OK`, 해당 정적 파일 | 백엔드가 프론트엔드 디렉터리를 마운트한다. HTML은 `/static/` 아래 자산을 참조한다. |
+| `GET /inference/{path}` | `model-version-client.mjs`, `model-config.mjs`, `model-client.mjs`, `mel-frontend.mjs`, `midi-decoder.mjs` | `200 OK`, 해당 JavaScript 모듈 | 백엔드가 `webscore_inference/web/`를 제공한다. 프론트엔드가 모듈을 import한다. |
+| `GET {manifestUrl}` | 기본값은 CDN의 `current.json` | `200 OK`, 아래 형식의 버전과 파일 URL 목록 | `VersionedWebScoreClient`가 CDN의 최신 모델 목록을 조회한다. |
+| `GET /api/model-manifest` | 본문·쿼리·인증 헤더 없음 | `200 OK`, `application/json`으로 버전과 파일 URL 목록 | 서버에서 URL을 제공할 때 `manifestUrl`을 이 경로로 지정한다. |
+| `GET {manifest.files[파일명]}` | 백엔드가 반환한 파일별 URL | `200 OK`, JSON 메타데이터 또는 ONNX 바이너리 | CDN이 응답하고 브라우저 추론 클라이언트가 다운로드한다. CDN은 실제 웹페이지 origin의 GET을 허용하도록 CORS를 설정한다. |
 
-### 업로드 성공 응답
+MVP는 로그인 없이 모델 URL 정보를 제공한다. R2를 선택한 경우에도 이 엔드포인트가 서명 URL을 발급하므로, 배포 담당자가 웹 사용자에게 제공할 모델 버전을 설정한다.
 
-`image_url`과 `download_url`은 둘 다 `/`로 시작하는 같은 서버의 경로다. 백엔드는 업로드마다 UUIDv4를 하나 만들고 두 URL에 같은 ID를 넣는다.
-
-```json
-{
-  "image_url": "/api/transcriptions/9af66c6c-baff-4916-9122-22011a94a4a3/score",
-  "download_url": "/api/transcriptions/9af66c6c-baff-4916-9122-22011a94a4a3/audio.mp3"
-}
-```
-
-백엔드는 서버 실행 중 유지되는 로컬 임시 디렉터리 안에 작업 ID별 폴더를 만든다. 원본 업로드를 `audio.mp3`로 저장하고 모델이 반환한 이미지를 같은 폴더에 저장한다. 두 파일을 저장한 뒤 `POST`에 응답하며, 이후 브라우저의 `GET` 요청에서 각 파일을 제공한다.
-
-## 오류 응답과 복구
-
-업로드와 결과 조회 API가 오류를 응답할 때는 `Content-Type: application/json`과 아래 본문 구조를 사용한다. 프론트엔드는 `error.code`로 복구 동작을 선택하고, 사용자에게 `error.message`를 표시한다.
+### 모델 URL 응답
 
 ```json
 {
-  "error": {
-    "code": "UNSUPPORTED_AUDIO_FORMAT",
-    "message": "MP3 파일을 선택해 주세요."
+  "schemaVersion": 1,
+  "format": "webscore-onnx-v1",
+  "version": "piano-v1",
+  "precision": "int8",
+  "files": {
+    "config.json": "https://models.example.com/piano-v1/config.json",
+    "tokenizer.json": "https://models.example.com/piano-v1/tokenizer.json",
+    "mel_encoder.onnx": "https://models.example.com/piano-v1/mel_encoder.onnx",
+    "token_embed.onnx": "https://models.example.com/piano-v1/token_embed.onnx",
+    "decoder_kv.int8.onnx": "https://models.example.com/piano-v1/decoder_kv.int8.onnx"
   }
 }
 ```
 
-| 요청 | HTTP 상태 | `error.code` | 백엔드가 반환하는 조건 | 프론트엔드 복구 동작 |
-| --- | --- | --- | --- | --- |
-| 업로드 | `400 Bad Request` | `INVALID_UPLOAD` | 멀티파트 요청을 읽을 수 없거나, `file` 필드에 파일이 정확히 한 개 들어 있지 않거나, 파일이 비어 있다. | MP3 파일 한 개를 다시 선택하도록 안내한다. |
-| 업로드 | `415 Unsupported Media Type` | `UNSUPPORTED_AUDIO_FORMAT` | 모델 연동 코드가 파일의 실제 형식을 확인했고, MP3가 아니다. | MP3 파일을 다시 선택하도록 안내한다. |
-| 업로드 | `422 Unprocessable Content` | `INVALID_AUDIO` | 파일 형식을 식별할 수 없거나 MP3를 디코딩할 수 없다. | 읽을 수 있는 MP3를 다시 선택하도록 안내한다. |
-| 업로드 | `503 Service Unavailable` | `MODEL_UNAVAILABLE` | 서버 시작 때 CPU 모델을 로딩하지 못했다. | 모델 파일과 실행 환경을 확인하고 로컬 서버를 재시작한 뒤, 선택한 파일을 다시 제출하도록 안내한다. |
-| 업로드 | `500 Internal Server Error` | `TRANSCRIPTION_FAILED` | 음원 전처리 이후 모델 추론에 실패했다. | 선택한 파일을 유지하고, 사용자가 다시 제출할 수 있게 한다. |
-| 업로드·결과 조회 | `500 Internal Server Error` | `RESULT_FAILED` | 채보 이미지를 생성하지 못했거나, 작업 파일을 저장하지 못했거나, 존재하는 결과 파일을 열지 못했다. | 업로드에서 실패하면 다시 제출할 수 있게 한다. 조회에서 실패하면 해당 결과만 같은 URL로 다시 요청할 수 있게 한다. |
-| 결과 조회 | `404 Not Found` | `RESULT_NOT_FOUND` | ID가 UUIDv4 형식이 아니거나 해당 결과가 없다. 서버 재시작으로 임시 파일이 사라진 경우도 포함한다. | 이미 있는 결과는 유지하고, 사라진 결과가 필요하면 원본 음원을 다시 제출하도록 안내한다. |
-| 업로드·결과 조회 | `500 Internal Server Error` | `INTERNAL_ERROR` | 위에서 분류하지 못한 서버 예외다. | 업로드면 다시 제출, 결과 조회면 같은 URL로 다시 요청할 수 있게 한다. |
+| 필드 | 타입 | 규칙 |
+| --- | --- | --- |
+| `schemaVersion` | 정수 | `1` |
+| `format` | 문자열 | `webscore-onnx-v1` |
+| `version` | 문자열 | 같은 export를 가리키는 고유 버전 ID. 파일이 바뀌면 ID도 변경한다. |
+| `precision` | 문자열 | `int8` 또는 `fp32`. FP32의 디코더 파일명은 `decoder_kv.onnx`. |
+| `files` | 파일명과 URL의 객체 | 메타데이터 두 개, ONNX 세 개를 모두 포함한다. URL은 절대 HTTPS 주소를 사용하며 로컬 개발에서는 localhost의 HTTP를 허용한다. 비공개 R2는 파일별 서명 URL을 반환한다. |
 
-### 백엔드 처리 순서
+응답은 `Cache-Control: no-store, private`로 제공한다. 모델 업데이트와 비공개 R2 배포 설정은 [모델 배포 문서](MODEL_AUTO_UPDATE.md)를 따른다.
 
-1. 서버 시작 시 모델을 로딩한다. `ModelLoadError`가 발생하면 화면 제공은 계속하고, 업로드를 받을 때 로딩 실패 상태를 사용한다.
-2. 업로드 형식과 파일 개수·크기를 확인한다. 여기서 크기 검사는 빈 파일을 판별하는 데 사용한다. 멀티파트 파서 오류와 FastAPI의 업로드 요청 검증 오류는 `400 INVALID_UPLOAD`로 변환한다. 요청이 유효하고 모델을 로딩하지 못한 상태면 `503 MODEL_UNAVAILABLE`을 반환한다. [FastAPI 예외 처리 문서](https://fastapi.tiangolo.com/tutorial/handling-errors/)
-3. 음원을 저장한 뒤 모델을 호출한다. 모델 어댑터는 디코더가 판별한 실제 음원 형식으로 검사한다. 모델 예외는 아래 Python 계약에 따라 변환한다. 저장과 이미지 생성이 끝나면 결과 URL을 반환하고, 그 전에 실패하면 해당 요청에서 생성한 임시 파일을 정리한다.
-4. 결과 조회에서는 상태와 응답 헤더를 보내기 전에 결과 파일을 열어 본다. 파일이 없으면 `404 RESULT_NOT_FOUND`, 파일이 있으나 열지 못하면 `500 RESULT_FAILED`를 반환한다. 결과 조회 응답에 `Cache-Control: no-store`를 넣어 재시도가 서버의 최신 상태를 확인하도록 한다.
+### 백엔드 환경 설정
 
-### 프론트엔드 처리 순서
+| 환경 변수 | 기본값 | 의미 |
+| --- | --- | --- |
+| `MODEL_SOURCE` | `manifest` | `manifest`는 공개 버전 목록 조회, `cdn`은 고정 CDN 버전 주소, `r2`는 비공개 R2 카탈로그와 서명 URL을 사용한다. |
+| `MODEL_MANIFEST_URL` | `https://models.midistudio.app/web-student-kd/current.json` | `manifest` 모드에서 조회할 모델 버전 목록. 각 API 요청마다 5초 제한으로 조회하고 최대 64KiB의 JSON을 읽는다. |
+| `MODEL_BASE_URL` | `cdn` 모드에서 설정 | 공개 CDN의 한 모델 버전 디렉터리 URL. 쿼리·프래그먼트 없이 지정한다. |
+| `MODEL_VERSION` | `cdn` 모드에서 설정 | 고정 CDN 응답에 넣을 버전 ID. |
+| `MODEL_PRECISION` | `int8` | `cdn` 모드의 디코더 정밀도. |
+| `FRONTEND_DIR` | `frontend/` | 화면과 정적 파일을 제공할 디렉터리. |
 
-1. `fetch` 응답은 본문을 읽기 전에 `response.ok`를 확인한다. 오류 응답이면 JSON의 `error.code`와 `error.message`를 읽는다. 연결 오류가 나면 로컬 서버가 실행 중인지 확인하도록 안내하고, 본문 읽기 실패나 계약에 맞지 않는 응답은 응답 처리 오류로 안내한다. [Fetch 응답 처리 문서](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch#handling_the_response)
-2. 업로드 요청이 끝나면 제출 버튼을 다시 활성화한다. 네트워크 오류나 성공 JSON 누락으로 결과 URL을 못 받았다면 선택한 파일을 유지하고 다시 제출할 수 있게 한다. 업로드를 반복하면 채보가 중복 실행될 수 있으므로 재제출은 사용자 동작으로 시작한다.
-3. 채보 이미지와 MP3 다운로드는 개별 상태로 관리한다. 네트워크·본문 읽기 오류, 예상과 다른 응답 형식 또는 이미지 표시 실패가 발생하면 해당 결과만 같은 URL로 다시 요청할 수 있게 한다. 사용할 수 있는 다른 결과는 화면에 유지한다. `404 RESULT_NOT_FOUND`는 원본 재제출로 복구한다. 이미지 교체나 화면 종료 시 사용이 끝난 객체 URL을 해제한다.
+기본 설정으로 실행하면 모델 담당자가 제공한 `current.json`에서 버전과 파일 URL을 조회한다. 다른 배포의 목록은 `MODEL_MANIFEST_URL`로 지정한다.
 
-## 백엔드와 모델 간 Python 인터페이스
-
-모델 에이전트가 `backend/transcription.py`에서 아래 인터페이스를 구현하고, 백엔드 에이전트가 `backend/main.py`에서 호출한다.
-
-| 인터페이스 | 입력 | 반환 | 호출 시점과 역할 |
-| --- | --- | --- | --- |
-| `load_model(model_dir: Path) -> Transcriber` | 모델 파일이 들어 있는 디렉터리의 절대 경로. 백엔드는 저장소 루트의 `models/` 경로를 전달한다. | CPU에서 추론할 수 있도록 로딩한 `Transcriber` 인스턴스 | 백엔드가 서버 시작 시 한 번 호출하고, 반환된 인스턴스를 업로드 처리에 사용한다. 모델 에이전트가 디렉터리 안의 파일명과 로딩 방식을 결정한다. |
-| `Transcriber.transcribe(audio_path: Path) -> ScoreImage` | 백엔드가 저장한 원본 MP3의 절대 경로 | `ScoreImage` 객체. `content`는 완성된 이미지의 `bytes`, `media_type`은 `image/png` 또는 `image/svg+xml`. | 업로드 한 건당 한 번 호출한다. 모델 에이전트가 MP3 전처리, CPU 추론, 악보 렌더링을 수행한다. 백엔드는 `content`를 파일로 저장하고 `media_type`을 이미지 응답의 `Content-Type`으로 사용한다. |
-
-모델 에이전트는 `backend/transcription.py`에서 아래 이름의 `Exception` 하위 클래스를 공개한다. 백엔드는 예외 클래스에 따라 HTTP 응답을 선택한다.
-
-| 발생 위치 | Python 예외 | 발생 조건 | 백엔드 변환 |
-| --- | --- | --- | --- |
-| `load_model()` | `ModelLoadError` | 모델 파일 또는 CPU 실행 환경 문제로 초기화할 수 없다. | 로딩 실패 상태를 기록하고 유효한 업로드 요청에 `503 MODEL_UNAVAILABLE`. |
-| `transcribe()` | `UnsupportedAudioFormatError` | 입력이 MP3 이외의 형식으로 확인됐다. | `415 UNSUPPORTED_AUDIO_FORMAT` |
-| `transcribe()` | `InvalidAudioError` | 형식을 판별할 수 없거나 필요한 MP3 샘플을 읽을 수 없다. | `422 INVALID_AUDIO` |
-| `transcribe()` | `InferenceError` | CPU 모델 추론에 실패했다. | `500 TRANSCRIPTION_FAILED` |
-| `transcribe()` | `ScoreRenderError` | 추론 결과로 유효한 PNG 또는 SVG를 만들 수 없다. | `500 RESULT_FAILED` |
-
-```python
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal, Protocol
-
-
-@dataclass(frozen=True)
-class ScoreImage:
-    content: bytes
-    media_type: Literal["image/png", "image/svg+xml"]
-
-
-class Transcriber(Protocol):
-    def transcribe(self, audio_path: Path) -> ScoreImage: ...
-
-
-def load_model(model_dir: Path) -> Transcriber: ...
+```sh
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
+
+## 프론트엔드와 모델 간 JavaScript 인터페이스
+
+프론트엔드는 `onnxruntime-web`을 준비하고 `VersionedWebScoreClient`를 초기화한다. 모델 클라이언트는 모델 URL 조회·다운로드·음원 전처리·추론·토큰 해석을 맡는다.
+
+| 인터페이스 | 입력 | 반환과 호출 규칙 |
+| --- | --- | --- |
+| `VersionedWebScoreClient.create(ort, options)` | `ort`는 ONNX Runtime Web 모듈. `options.manifestUrl`의 기본값은 `model-config.mjs`에 지정한 CDN `current.json`. `options.clientOptions.executionProviders`는 기본 MVP에서 `['wasm']`. | `Promise<VersionedWebScoreClient>`. 화면 준비 시 한 번 호출하고 파일 처리에 재사용한다. |
+| `model.transcribeAudio(file, options)` | 사용자가 선택한 MP3 `File`. `options.onProgress`는 선택적인 진행 콜백. | `Promise<{ notes, midiBytes, tokensByChunk }>`. 아래 음표 형식으로 렌더링한다. `midiBytes`와 `tokensByChunk`는 모델 패키지의 추가 반환값이다. |
+| `options.onProgress(progress)` | `{ completedChunks: number, totalChunks: number }` | 프론트엔드가 채보 진행 상태를 표시한다. |
+| `model.checkForUpdate()` | 없음 | 새 버전 확인 결과 `{ updated: boolean, version: string }`. 로딩된 버전이 있으면 업데이트 실패 시 해당 버전을 유지한다. |
+| `model.dispose()` | 없음 | 화면 종료 시 예약된 작업이 끝난 뒤 세션을 해제한다. |
+
+`notes`는 다음 객체의 배열이다. 프론트엔드가 이 값을 SVG 등으로 렌더링한다.
+
+| 음표 필드 | 타입 | 의미 |
+| --- | --- | --- |
+| `program` | 정수 | MIDI 악기 번호 `0..127`. 타악기는 `128`. |
+| `pitch` | 정수 | MIDI 음높이 `0..127`. |
+| `onset` | 숫자 | 원본 음원 기준 시작 시각, 단위는 초. |
+| `offset` | 숫자 | 원본 음원 기준 종료 시각, 단위는 초. |
+| `isDrum` | 불리언 | 타악기 여부. |
+
+Vite에서 백엔드가 제공하는 추론 모듈을 런타임에 가져오는 예시는 다음과 같다.
+
+```js
+import * as ort from 'onnxruntime-web';
+
+const { VersionedWebScoreClient } = await import(
+  /* @vite-ignore */ '/inference/model-version-client.mjs'
+);
+const model = await VersionedWebScoreClient.create(ort, {
+  clientOptions: { executionProviders: ['wasm'] },
+});
+
+async function transcribeFile(file, onProgress) {
+  return model.transcribeAudio(file, { onProgress });
+}
+```
+
+원본 MP3 다운로드는 프론트엔드가 선택한 `File`의 객체 URL과 다운로드 링크로 구현한다. 객체 URL과 모델 세션의 해제도 프론트엔드가 담당한다. [브라우저 객체 URL 문서](https://developer.mozilla.org/en-US/docs/Web/API/URL/createObjectURL_static)
+
+## 오류 응답과 복구
+
+| 구간 | 오류 | 처리 담당과 복구 |
+| --- | --- | --- |
+| 모델 URL 조회 | `503 Service Unavailable`, `MODEL_MANIFEST_UNAVAILABLE` | 백엔드가 아래 JSON으로 응답한다. 프론트엔드는 모델 준비 실패를 표시하고 사용자가 다시 초기화할 수 있게 한다. 배포 담당자는 CDN 또는 R2 설정을 확인한다. |
+| 모델 파일 다운로드·최초 로딩 | 네트워크, CORS, 만료 URL, 메타데이터 불일치, 런타임 로딩 오류 | 모델 클라이언트의 Promise가 reject된다. 프론트엔드는 파일 선택을 유지하고 모델 준비를 재시도한다. |
+| 모델 버전 갱신 | 새 모델 URL 조회 또는 로딩 실패 | 모델 클라이언트는 준비된 이전 버전으로 계속 처리하고 `onUpdateError`로 알린다. |
+| 음원 디코딩·추론·이미지 렌더링 | 브라우저 처리 실패 | 프론트엔드는 해당 단계의 실패를 표시하고 재시도 또는 다른 MP3 선택을 제공한다. |
+
+```json
+{
+  "error": {
+    "code": "MODEL_MANIFEST_UNAVAILABLE",
+    "message": "모델 다운로드 정보를 가져올 수 없습니다. 설정을 확인하고 다시 시도해 주세요."
+  }
+}
+```
+
+## 이전 계약에서의 변경
+
+MP3 업로드 `POST /api/transcriptions`, 이미지 조회 `GET /api/transcriptions/{id}/score`, MP3 조회 `GET /api/transcriptions/{id}/audio.mp3`를 브라우저 내부 처리로 대체했다. 프론트엔드는 이 경로를 호출하던 코드를 모델 클라이언트 호출과 객체 URL 처리로 전환한다.
+
+`backend/transcription.py`와 Python CPU 어댑터는 별도 로컬 실행용 소스로 보관한다. 현재 웹 서비스의 모델 인터페이스는 이 문서의 JavaScript 계약을 따른다.

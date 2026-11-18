@@ -1,140 +1,54 @@
-# Model-only version updates
+# 모델 배포와 버전 업데이트
 
-`webscore_inference/web/model-version-client.mjs` adds a model wrapper, not a UI,
-login API or live deployment. The existing direct `WebScoreClient` remains usable.
+브라우저의 `VersionedWebScoreClient`는 `webscore_inference/web/model-config.mjs`의 CDN `current.json`을 기본 주소로 사용한다. 서버의 `GET /api/model-manifest`를 사용하려면 클라이언트 생성 옵션에 `manifestUrl: '/api/model-manifest'`를 지정한다. [HTTP API와 JavaScript 인터페이스](API.md)
 
-```js
-import * as ort from 'onnxruntime-web'; // WASM example; WebGPU needs /webgpu build
-import { VersionedWebScoreClient } from './web/model-version-client.mjs';
-const model = await VersionedWebScoreClient.create(ort, {
-  manifestUrl: '/api/model-manifest',
-  clientOptions: { executionProviders: ['wasm'] },
-  pollIntervalMs: 60000,
-  checkBeforeInference: true,
-  onUpdate: ({ version }) => { /* optional model-version display */ },
-  onUpdateError: () => { /* optional retry indicator; no raw URLs */ },
-});
-const result = await model.transcribeAudio(audioFile);
-// On application teardown:
-await model.dispose();
-```
+## 공개 CDN 설정
 
-## Manifest and publication contract
+기본 설정은 모델 담당자가 배포한 [현재 버전 목록](https://models.midistudio.app/web-student-kd/current.json)을 조회한다. 이 목록에는 버전 ID, 정밀도, 같은 export의 파일 URL 다섯 개가 들어 있다. 백엔드가 각 API 요청마다 목록을 읽으므로 배포 담당자가 `current.json`을 바꾸면 브라우저의 다음 버전 확인에 반영된다.
 
-See `webscore_inference/examples/model-manifest.json`. Required format is
-`webscore-onnx-v1`, `schemaVersion: 1`, immutable version ID, precision `int8` or
-`fp32`, and a complete set of file URLs. FP32 uses `decoder_kv.onnx`. Relative URLs
-resolve against the manifest endpoint; private deployments should return explicit
-HTTPS signed URLs for all five files. The same version may renew its signed URLs
-without forcing an already loaded model to download again. Never put a secret
-access key or account API token in browser code or the manifest.
+| 환경 변수 | 값 |
+| --- | --- |
+| `MODEL_SOURCE` | `manifest`, 기본값 |
+| `MODEL_MANIFEST_URL` | `https://models.midistudio.app/web-student-kd/current.json`, 기본값 |
 
-Publisher steps:
-1. Export and validate the entire model set into a **new immutable version path**.
-2. Upload every required file. Check object sizes/hashes and run compatibility and
-   inference validation. Do not overwrite a published version's files.
-3. Only then replace the small current-version manifest (or its authenticated API
-   response) in one operation. Its `version` must change for any artifact change.
-4. Serve manifest responses with `Cache-Control: no-store`; configure CDN/cache
-   rules not to cache that endpoint. The client also requests `cache: no-store`,
-   which does not itself override a misconfigured CDN. Model objects may be cached
-   long-term at version-specific URLs, subject to the deployment's access policy.
-5. Retain the preceding version for rollback, in-flight clients and expiring URLs.
-   To roll back, publish its previous manifest as current. Avoid deleting old
-   artifacts while existing users can still need them.
+현재 제공받은 초기 export는 `step-00036000-int8-v1`이다. 해당 버전의 `config.json`은 [모델 설정](https://models.midistudio.app/web-student-kd/releases/step-00036000-int8-v1/config.json)에서 확인한다.
 
-The publisher must supply one compatible set; the client checks manifest format,
-metadata (16kHz, FFT2048, mel512, frame rate100, GQA dimensions, vocabulary and special
-token IDs), session IO names and load success. This is **not** a cryptographic
-verification or a proof of transcription quality. Only trust a controlled manifest
-endpoint. Private manifest APIs must authenticate the user, sign URLs for the
-selected version, ensure adequate URL lifetime, and configure object CORS for the
-web app. An optional server-side signing adapter is provided below; wiring the host's authentication and deployment remains a host integration task.
+고정 버전을 제공할 때는 아래 설정을 사용한다.
 
-## Update behavior
+| 환경 변수 | 값 |
+| --- | --- |
+| `MODEL_SOURCE` | `cdn` |
+| `MODEL_BASE_URL` | 같은 export의 파일 다섯 개를 배치한 HTTPS 버전 디렉터리 URL |
+| `MODEL_VERSION` | 해당 export의 고유 버전 ID |
+| `MODEL_PRECISION` | `int8`, 기본값. FP32 디코더를 제공하면 `fp32`. |
 
-- Manifest requests (including JSON parsing) have a 15-second timeout by default;
-  set `manifestTimeoutMs` to change it. Timed-out fetches are aborted and cannot
-  block the queue indefinitely. This does not cancel ORT session loading.
-- Checks once during creation, every 60 seconds by default, and before inference.
-  Set polling to `0` to disable background checks; manual `checkForUpdate()` is also
-  available. This is polling, not instant server push.
-- Inference and checks are serialized. An entire song finishes with one model,
-  including all chunks, before a pending replacement is loaded and activated.
-- All new sessions must load and pass interface checks before an atomic client
-  swap; old sessions are released afterward. Updates may temporarily require
-  memory for **both** versions. If replacement cannot load, the old model remains.
-- Malformed/incompatible manifest, expired links or network/load failure preserve
-  the old version; initial load failure rejects because no old version exists.
-- `dispose()` stops polling, waits for work already queued, and releases sessions.
-- Errors passed to callbacks omit URLs/provider causes. Browser developer tools
-  and the runtime itself can still expose signed URLs to the authorized browser.
+INT8 버전에는 `config.json`, `tokenizer.json`, `mel_encoder.onnx`, `token_embed.onnx`, `decoder_kv.int8.onnx`가 필요하다. FP32는 디코더 파일명만 `decoder_kv.onnx`로 바뀐다. 모델 파일을 변경하면 새 버전 경로와 ID를 사용한다. CDN의 CORS는 실제 웹페이지 origin의 GET을 허용하도록 설정한다.
 
-## Validation limits
+## 비공개 R2 설정
 
-The updater tests use controlled clients to cover version changes, failed loads,
-metadata mismatch, session cleanup, active-inference ordering, polling, rollback,
-and signed-URL redaction. They do not establish real-browser WebGPU compatibility,
-live R2 CORS, authentication or live automatic rollout. Uploading browser ONNX files and configuring the manifest endpoint
-are separate deployment steps; a successful code test does not prove a live rollout. No R2 public-access setting is changed here.
+`pip install -r requirements-model-manifest.txt`로 서버 의존성을 설치하고 `MODEL_SOURCE=r2`를 설정한다. 모델 URL API는 웹 사용자에게 파일별 서명 URL을 제공한다.
 
-Run: `node --test webscore_inference/tests/test_model_versions.mjs`
+| 환경 변수 | 의미와 기본값 |
+| --- | --- |
+| `R2_MODEL_ACCOUNT_ID` | R2 계정 ID |
+| `R2_MODEL_BUCKET` | 모델 버킷 이름 |
+| `R2_MODEL_ACCESS_KEY_ID` | 서버의 버킷 읽기 키 |
+| `R2_MODEL_SECRET_ACCESS_KEY` | 서버의 버킷 읽기 비밀 키 |
+| `R2_MODEL_CATALOG_KEY` | `web-student-kd/current.json` |
+| `R2_MODEL_RELEASE_PREFIX` | `web-student-kd/releases` |
+| `R2_MODEL_URL_TTL_SECONDS` | `3600`, 허용 범위는 60–3600초 |
 
-## Optional private-R2 server adapter (disabled by default)
-
-`backend/model_manifest.py` supplies an **opt-in** FastAPI router. The default app
-still mounts no `/api/model-manifest` endpoint. It does not create a login bypass.
-Install `requirements-model-manifest.txt` on the server if using this adapter.
-
-Configure these **server-only** environment variables:
-
-- `R2_MODEL_ACCOUNT_ID`, `R2_MODEL_BUCKET`
-- `R2_MODEL_ACCESS_KEY_ID`, `R2_MODEL_SECRET_ACCESS_KEY` (bucket-scoped read only)
-- `R2_MODEL_CATALOG_KEY` (default `web-student-kd/current.json`)
-- `R2_MODEL_RELEASE_PREFIX` (default `web-student-kd/releases`)
-- `R2_MODEL_URL_TTL_SECONDS` (default 3600, allowed 60–3600 seconds)
-
-Never commit actual values, embed them in JavaScript, or log them. Do not enable
-botocore wire/debug logging or response-body capture on this endpoint. Signed URLs
-are temporary bearer access and must not appear in application logs/analytics.
-
-Integration in the host's existing app factory, **after wiring its real auth**:
-
-```python
-from backend.model_manifest import (
-    ManifestSettings, ModelManifestService, make_r2_client,
-    create_model_manifest_router,
-)
-
-async def authorize_model_download(request):
-    # Replace with the team's VERIFIED login/session + permission check.
-    # Do not trust a client header, query parameter, or an unverified user ID.
-    return False  # Fail closed until the host's auth integration exists.
-
-settings = ManifestSettings.from_env()
-service = ModelManifestService(settings, make_r2_client(settings))
-app.include_router(create_model_manifest_router(service, authorize_model_download))
-```
-
-The hook must explicitly return boolean `True`; missing/false/error is denied.
-The route reads one fixed catalog key from one configured bucket, bounds it to
-64KiB, validates all five immutable release keys, and signs only GET requests.
-Request parameters cannot choose a different bucket/key/version. All responses,
-including denial and error, carry `Cache-Control: no-store, private`.
-
-### Private catalog versus runtime manifest
-
-The private R2 catalog stores **keys, sizes and SHA256**, not expiring URLs:
+R2 카탈로그에는 파일별 키, 크기, SHA256을 저장한다. 아래 예시의 `files`는 항목 하나를 보여 주며, 실제 카탈로그에는 같은 버전의 파일 다섯 개를 모두 넣는다.
 
 ```json
 {
   "schemaVersion": 1,
   "format": "webscore-onnx-v1",
-  "version": "step-00036000-int8-v1",
+  "version": "piano-v1",
   "precision": "int8",
   "files": {
     "config.json": {
-      "key": "web-student-kd/releases/step-00036000-int8-v1/config.json",
+      "key": "web-student-kd/releases/piano-v1/config.json",
       "size": 343,
       "sha256": "REPLACE_WITH_ACTUAL_64_HEX_SHA256"
     }
@@ -142,18 +56,16 @@ The private R2 catalog stores **keys, sizes and SHA256**, not expiring URLs:
 }
 ```
 
-The example is abbreviated: all five entries are mandatory. For each file,
-`key` must exactly match `{release_prefix}/{version}/{filename}`. Publishing tools
-must calculate real sizes/hashes and verify uploaded objects before publishing
-`current.json`. The adapter validates metadata syntax, **not file bytes**; the
-publisher's integrity verification remains required.
+각 키는 `{release_prefix}/{version}/{filename}` 형식을 사용한다. 배포 담당자가 실제 크기와 체크섬으로 업로드를 확인한 뒤 카탈로그를 갱신한다. 서버는 카탈로그 한 번의 조회에서 같은 버전의 URL을 생성하며, API 응답과 오류에는 R2 접근 키를 넣지 않는다.
 
-The server reads this private catalog directly via S3, then returns the existing
-runtime manifest contract with five freshly signed URLs. Thus there is no stale
-long-lived URL in the published catalog. The frontend keeps one stable,
-same-origin `/api/model-manifest` URL and uses the wrapper described above.
+호스트가 추후 별도 인증을 추가할 때는 `create_model_manifest_router(service, authorize)`를 사용할 수 있다. 현재 MVP의 공개 모델 URL API는 `backend/main.py`에서 제공한다.
 
-Remaining host integration: mount the router with real authorization, provision
-read-only server credentials, configure CORS for the actual website's origin, and
-exclude the manifest endpoint from intermediary caching. No UI change or public
-bucket is required. This PR does not perform those live environment changes.
+## 브라우저 업데이트 동작
+
+- `VersionedWebScoreClient`는 최초 로딩, 기본 60초 주기, 추론 시작 전에 버전을 확인한다. `pollIntervalMs: 0`으로 주기 확인을 끌 수 있다.
+- 현재 처리 중인 곡은 같은 모델로 끝낸 뒤 다음 버전을 로딩한다. 새 세션이 모두 준비되고 인터페이스 검사를 통과하면 교체한다.
+- 새 버전 로딩에 실패하면 로딩된 이전 모델을 사용한다. 최초 로딩 실패는 호출자에게 오류를 반환한다.
+- 같은 버전의 서명 URL이 갱신되어도 이미 로딩된 세션을 재사용한다.
+- 매니페스트 조회 기본 제한 시간은 15초다. `dispose()`는 예약 작업이 끝난 뒤 세션을 해제한다.
+
+버전 교체·세션 해제·실패 복구 테스트는 `node --test webscore_inference/tests/test_model_versions.mjs`로 실행한다. 실제 CDN 다운로드와 ONNX 실행은 배포 주소와 호환 모델을 준비한 뒤 확인한다.

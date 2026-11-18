@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { VersionedWebScoreClient } from '../web/model-version-client.mjs';
+import { DEFAULT_MANIFEST_URL } from '../web/model-config.mjs';
 
 const manifest = version => ({ schemaVersion: 1, format: 'webscore-onnx-v1', version, precision: 'int8', files: Object.fromEntries(['config.json','tokenizer.json','mel_encoder.onnx','token_embed.onnx','decoder_kv.int8.onnx'].map(n => [n, `./${version}/${n}?signature=private`])) });
 function harness(extra = {}) {
@@ -20,6 +21,33 @@ test('loads complete version set, bypasses manifest cache, skips same-version re
   assert.ok(Object.values(state.clients[0].opts.modelUrls).every(u => u.includes('/v1/')));
   assert.equal(state.calls[0].cache,'no-store');
   await client.checkForUpdate(); assert.equal(state.clients.length,1); await client.dispose();
+});
+test('uses the configured CDN current manifest when no URL is supplied', async () => {
+  const { state, options } = harness();
+  delete options.manifestUrl;
+  let requestedUrl;
+  const fetchManifest = options.fetchImpl;
+  options.fetchImpl = async (url, init) => {
+    requestedUrl = url;
+    return fetchManifest(url, init);
+  };
+  const client = await VersionedWebScoreClient.create({}, options);
+  try {
+    assert.equal(requestedUrl, DEFAULT_MANIFEST_URL);
+    assert.equal(client.modelVersion, 'v1');
+    assert.equal(state.clients.length, 1);
+  } finally {
+    await client.dispose();
+  }
+});
+test('supports an explicit backend manifest URL instead of the CDN default', async () => {
+  const { options } = harness({ manifestUrl: 'http://127.0.0.1:8000/api/model-manifest' });
+  const client = await VersionedWebScoreClient.create({}, options);
+  try {
+    assert.equal(client.manifestUrl, 'http://127.0.0.1:8000/api/model-manifest');
+  } finally {
+    await client.dispose();
+  }
 });
 test('replaces only after complete load and disposes old sessions', async () => {
   const {state,options}=harness(); const client=await VersionedWebScoreClient.create({},options);

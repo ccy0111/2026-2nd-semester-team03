@@ -1,4 +1,5 @@
 import { WebScoreClient } from './model-client.mjs';
+import { DEFAULT_MANIFEST_URL } from './model-config.mjs';
 
 const FILES = ['config.json', 'tokenizer.json', 'mel_encoder.onnx', 'token_embed.onnx'];
 
@@ -53,7 +54,7 @@ export class VersionedWebScoreClient {
     return instance;
   }
 
-  constructor(ort, { manifestUrl, clientOptions = {}, pollIntervalMs = 60000,
+  constructor(ort, { manifestUrl = DEFAULT_MANIFEST_URL, clientOptions = {}, pollIntervalMs = 60000,
     checkBeforeInference = true, manifestTimeoutMs = 15000, onUpdate = null, onUpdateError = null,
     fetchImpl = globalThis.fetch, clientFactory = WebScoreClient.create.bind(WebScoreClient) } = {}) {
     const base = globalThis.location?.href;

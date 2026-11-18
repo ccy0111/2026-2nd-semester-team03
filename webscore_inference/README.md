@@ -32,7 +32,7 @@ node --test tests/test_inference.mjs
 ## Publication status
 This is a source-only snapshot. Model weights and training checkpoints are intentionally omitted while training continues. Real ONNX/browser inference has not been validated in this publication; the Node tests use synthetic inputs, mocked downloads and a mock runtime.
 
-This browser package remains separate from the FastAPI API. The new CPU adapter in backend/ implements the shared model contract and SVG score preview; see ../CPU_ADAPTER.md. For hosting, place tokenizer.json and config.json alongside the externally supplied ONNX files at baseUrl (default /models). The metadata files are stored at this package root and are not automatically served from /models.
+The MVP backend serves these JavaScript modules under `/inference/`. `VersionedWebScoreClient` defaults to the CDN manifest URL in `web/model-config.mjs`. Pass `manifestUrl: '/api/model-manifest'` to use the backend URL provider; see `../docs/API.md`. Place tokenizer.json and config.json alongside the compatible ONNX files in the CDN version directory. The Python CPU adapter in `backend/` is available for standalone local use; see [CPU adapter](../docs/CPU_ADAPTER.md).
 
 ## R2 배포 연결: 피아노 시운전 모델
 
@@ -48,7 +48,7 @@ This browser package remains separate from the FastAPI API. The new CPU adapter 
 
 ### 비공개 버킷: 파일별 단기 서명 URL
 
-R2 버킷을 공개로 전환할 필요가 없습니다. 앱의 **서버**가 사용자 인증/권한을 확인하고 각 파일에 대한 단기 GET 서명 URL을 발급한 뒤, 브라우저는 다음 형태로 전달합니다. 이 PR은 로그인이나 URL 발급 API를 구현하지 않습니다. 아래 `authorizedModelUrls`는 그 API에서 받은 값이며, Git/HTML에 고정 저장하지 않습니다.
+앱의 서버가 R2 파일별 단기 GET 서명 URL을 발급한다. 현재 MVP는 `MODEL_SOURCE=r2` 설정 시 `/api/model-manifest`에서 이 URL 묶음을 웹 사용자에게 제공한다. 설정과 카탈로그 형식은 `../docs/MODEL_AUTO_UPDATE.md`를 따른다. 아래 `authorizedModelUrls`는 서버가 발급한 값이다.
 
 ```js
 // All five filenames must be present. Values are independently signed GET URLs.
@@ -80,7 +80,7 @@ const client = await WebScoreClient.create(ort, {
 
 ### 인수 확인
 
-Node 로더 테스트는 URL 전달/서명 보존/누락 및 403 처리와 mock runtime을 검증합니다. Python API 회귀 테스트도 별도입니다. **실제 R2 다운로드, ONNX 수치 일치, WebGPU/WASM 실행, 속도 및 피아노 채보 품질 검증을 대체하지 않습니다.** 프런트엔드는 아직 이 패키지와 연결되어 있지 않으며, FastAPI CPU 경로에 R2 URL을 넣어 브라우저 추론으로 바뀌는 구조가 아닙니다.
+Node 로더 테스트는 URL 전달/서명 보존/누락 및 403 처리와 mock runtime을 검증합니다. Python API 테스트는 모델 URL 응답과 JavaScript 모듈 제공을 검증합니다. 실제 프론트엔드 화면 연결, CDN 다운로드, WebGPU/WASM 실행은 배포 환경과 실제 모델로 확인합니다.
 
 ## Inference optimization controls (opt-in)
 
