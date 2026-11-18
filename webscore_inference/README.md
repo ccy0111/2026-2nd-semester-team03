@@ -81,3 +81,73 @@ const client = await WebScoreClient.create(ort, {
 ### 인수 확인
 
 Node 로더 테스트는 URL 전달/서명 보존/누락 및 403 처리와 mock runtime을 검증합니다. Python API 회귀 테스트도 별도입니다. **실제 R2 다운로드, ONNX 수치 일치, WebGPU/WASM 실행, 속도 및 피아노 채보 품질 검증을 대체하지 않습니다.** 프런트엔드는 아직 이 패키지와 연결되어 있지 않으며, FastAPI CPU 경로에 R2 URL을 넣어 브라우저 추론으로 바뀌는 구조가 아닙니다.
+
+## Inference optimization controls (opt-in)
+
+Use the WebGPU build explicitly when testing a GPU path:
+
+```js
+import * as ort from 'onnxruntime-web/webgpu';
+const client = await WebScoreClient.create(ort, {
+  modelUrls: authorizedModelUrls,
+  useInt8: true,
+  executionProviders: ['wasm'], // verified fallback, including Node WASM tests
+  cacheEmbeddings: true,       // one batched lookup, ~3.5 MiB extra CPU memory
+});
+// After all in-flight transcription is finished:
+await client.dispose();
+```
+
+`cacheEmbeddings` defaults to false. When enabled, the existing exported embedding
+model evaluates all vocabulary IDs once and caches the exact resulting float32
+table. No embedding weights are approximated. Repeated token embedding session
+calls are replaced by array gathers. CPU encoder/decoder preprocessing and token
+sampling remain unchanged. `dispose()` releases the sessions and table; do not
+call it during an active transcription. Concurrent `transcribePcm()` calls on
+one client are rejected.
+
+### Last-position output projection
+
+The autoregressive client only needs the last-position logits, but the original
+export computes the output projection for every prefill position. To create a
+separate, compatible export:
+
+```sh
+python -m pip install -r webscore_inference/tools/requirements.txt
+python webscore_inference/tools/optimize_last_logits.py SOURCE_EXPORT NEW_EXPORT
+```
+
+The tool verifies the known FP32 WebScore final normalization/MatMul pattern,
+slices the final hidden state before output normalization/projection, and
+optionally re-quantizes the optimized decoder. It refuses to overwrite any
+existing export. Attention and KV outputs are unchanged. The new config carries
+`decoder_logits: "last"`; the client accepts both `[1,seq,vocab]` and
+`[1,1,vocab]` outputs. Deploy all files from the same new export together, and
+validate numerical/sequence behavior before changing an app's model version.
+
+### Experimental GPU-resident KV cache (not validated on a real browser)
+
+`gpuKvCache: true` keeps decoder `present_k` and `present_v` outputs on GPU while
+leaving logits on CPU for sampling. It requires `useInt8:false` and WebGPU as the
+first execution provider. Previous GPU tensors are released after the next run,
+and the final cache is released on EOS/error. This is **off by default**: do not
+enable it in production without device-specific correctness, latency and memory
+tests. Dynamic INT8 operator coverage is not assumed to be GPU-native; selecting
+WebGPU does not establish that every operator ran there.
+
+No graph capture is enabled: the current KV sequence dimension grows dynamically.
+No FP16 model is substituted: the client's I/O contract remains float32. The
+existing provider default remains `['webgpu','wasm']`, but automatic device
+selection and browser-specific fallback are not yet validated. Use explicit
+`['wasm']` for the verified CPU path.
+
+WASM multithreading requires cross-origin isolation in a browser and should be
+configured at the application/runtime level. Web Worker execution can improve UI
+responsiveness; it is not a promise of faster model inference. This source-only
+package does not modify hosting headers or another team's UI.
+
+The mel frontend also skips exactly-zero filter coefficients and reuses FFT
+scratch buffers. This arithmetic-preserving optimization is enabled normally;
+regression tests compare sparse and dense summation exactly and check buffer
+reset across noise/tone/silence. It changes preprocessing cost, not the learned
+model, chunk boundary accuracy, or predicted instrument identity.

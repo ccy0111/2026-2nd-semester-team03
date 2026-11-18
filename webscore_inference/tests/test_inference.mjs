@@ -267,3 +267,63 @@ test("token limit without EOS is an explicit error", async () => {
  });
  await assert.rejects(client.transcribeChunk(new Float32Array(80000),{maxGenLen:1}),/EOS/);
 });
+
+test("cached embedding table is exact and uses a single session call", async () => {
+  const tok = makeFakeTokenizer(); let calls=0;
+  class Tensor { constructor(type,data,dims) { Object.assign(this,{type,data,dims}); } }
+  const client=new WebScoreClient({Tensor},{tokenizer:tok,arch:{dim:2},cacheEmbeddings:true,
+    embedSession:{run:async({input_ids})=>{calls++;let a=Array.from(input_ids.data,Number).flatMap(i=>[i,-i]);return {token_embeds:new Tensor('float32',Float32Array.from(a),[1,input_ids.data.length,2])};}}});
+  assert.deepEqual(Array.from((await client.embedTokenIds([1,7])).data),[1,-1,7,-7]);
+  assert.deepEqual(Array.from((await client.embedTokenIds([3])).data),[3,-3]);assert.equal(calls,1);
+});
+
+test("last-position logits and GPU KV lifetime are supported", async () => {
+ const tok=makeFakeTokenizer(); let disposeCount=0;let calls=0;
+ class Tensor {constructor(type,data,dims){Object.assign(this,{type,data,dims});}}
+ const gpu=()=>({dims:[1,1,1,1,4],location:'gpu-buffer',dispose(){disposeCount++;}});
+ const c=new WebScoreClient({Tensor},{tokenizer:tok,arch:{dim:4,num_layers:1,num_heads:1,num_kv_heads:1},gpuKvCache:true,
+ encoderSession:{run:async()=>({cond_embeds:new Tensor('float32',new Float32Array(8),[1,2,4])})},
+ embedSession:{run:async()=>({token_embeds:new Tensor('float32',new Float32Array(4),[1,1,4])})},
+ decoderSession:{run:async()=>{let logits=new Float32Array(tok.vocab_size).fill(-10);logits[calls++===0?4:2]=10;return {logits:new Tensor('float32',logits,[1,1,tok.vocab_size]),present_k:gpu(),present_v:gpu()};}}});
+ assert.deepEqual(await c.transcribeChunk(new Float32Array(80000)),[4,2]);
+ assert.equal(disposeCount,4); // old pair after next run, final pair on EOS
+ c.decoderSession.run=async()=>{throw new Error('run failed');};
+ await assert.rejects(c.transcribeChunk(new Float32Array(80000)),/run failed/);
+});
+
+test("GPU KV option rejects unsafe provider/quantized combinations", async () => {
+ await assert.rejects(WebScoreClient.create({}, {gpuKvCache:true, useInt8:true}),/WebGPU first/);
+});
+
+test("failed model load releases the other successfully loaded sessions", async (t) => {
+ let released=0;
+ t.mock.method(globalThis,'fetch',async url=>({ok:true,json:async()=>url.includes('tokenizer')?makeFakeTokenizer():{dim:2}}));
+ const ort={InferenceSession:{create:async url=>{if(url.includes('decoder'))throw new Error('private-url');return {release:async()=>released++};}}};
+ await assert.rejects(WebScoreClient.create(ort,{baseUrl:'/models',executionProviders:['wasm']}),/Failed to load/);
+ assert.equal(released,2);
+});
+
+test("dispose releases all sessions once and blocks reuse", async () => {
+ let count=0;const session={release:async()=>count++};
+ const c=new WebScoreClient({}, {tokenizer:makeFakeTokenizer(),arch:{},encoderSession:session,embedSession:session,decoderSession:session});
+ c.transcribing=true;await assert.rejects(c.dispose(),/during transcription/);c.transcribing=false;
+ await c.dispose();await c.dispose();assert.equal(count,3);
+ await assert.rejects(c.transcribePcm(new Float32Array(1)),/disposed/);
+});
+
+test("sparse mel filters exactly match dense summation and buffers reset", () => {
+ const sparse=new WebMelProcessor(),dense=new WebMelProcessor();dense.melRanges=Array.from({length:512},()=>[0,1025]);
+ for (const mode of ['noise','tone','silence']) {
+  const x=Float32Array.from({length:80000},(_,i)=>mode==='noise'?Math.sin(i*1337.1)*.7:mode==='tone'?Math.sin(i*.1):0);
+  const a=sparse.computeChunkLogMel(x).data,b=dense.computeChunkLogMel(x).data;
+  assert.deepEqual(a,b);
+  if(mode==='silence')assert.ok(a.every(v=>Math.abs(v-Math.log(1e-6))<1e-6));
+ }
+});
+
+test("constructor metadata failure releases every created session", async (t) => {
+ let released=0;t.mock.method(globalThis,'fetch',async()=>({ok:true,json:async()=>({})}));
+ const ort={InferenceSession:{create:async()=>({release:async()=>released++})}};
+ await assert.rejects(WebScoreClient.create(ort,{baseUrl:'/models'}),/Invalid model metadata/);
+ assert.equal(released,3);
+});

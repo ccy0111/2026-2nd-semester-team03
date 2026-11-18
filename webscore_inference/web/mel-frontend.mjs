@@ -52,6 +52,8 @@ function buildMelFilterbank(sr = SAMPLE_RATE, nFft = N_FFT, nMels = N_MELS) {
 class Radix2FFT {
   constructor(n) {
     this.n = n;
+    this.re = new Float32Array(n);
+    this.im = new Float32Array(n);
     this.rev = new Uint32Array(n);
     const bits = Math.round(Math.log2(n));
     for (let i = 0; i < n; i++) {
@@ -74,8 +76,9 @@ class Radix2FFT {
 
   magnitudeSpectrum(frame, outMag) {
     const n = this.n;
-    const re = new Float32Array(n);
-    const im = new Float32Array(n);
+    const re = this.re;
+    const im = this.im;
+    im.fill(0);
     for (let i = 0; i < n; i++) {
       re[this.rev[i]] = frame[i];
     }
@@ -108,6 +111,16 @@ export class WebMelProcessor {
   constructor() {
     this.window = buildHannWindow(N_FFT);
     this.melFb = buildMelFilterbank(SAMPLE_RATE, N_FFT, N_MELS);
+    // HTK triangle filters have narrow support. Skip exact zero coefficients,
+    // retaining the original increasing-frequency accumulation order.
+    const nFreqs = (N_FFT >> 1) + 1;
+    this.melRanges = Array.from({ length: N_MELS }, (_, m) => {
+      let first = nFreqs, end = 0;
+      for (let k = 0; k < nFreqs; k++) {
+        if (this.melFb[m * nFreqs + k] !== 0) { first = Math.min(first, k); end = k + 1; }
+      }
+      return [first, end];
+    });
     this.fft = new Radix2FFT(N_FFT);
     this._frameBuf = new Float32Array(N_FFT);
     this._magBuf = new Float32Array((N_FFT >> 1) + 1);
@@ -140,7 +153,8 @@ export class WebMelProcessor {
       for (let m = 0; m < N_MELS; m++) {
         const fbOffset = m * nFreqs;
         let sum = 0.0;
-        for (let k = 0; k < nFreqs; k++) {
+        const [first, end] = this.melRanges[m];
+        for (let k = first; k < end; k++) {
           sum += this._magBuf[k] * this.melFb[fbOffset + k];
         }
         out[rowOffset + m] = Math.log(sum + MEL_EPS);
