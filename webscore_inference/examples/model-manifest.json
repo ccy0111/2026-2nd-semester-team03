@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "format": "webscore-onnx-v1",
+  "version": "step-00036000-int8-v1",
+  "precision": "int8",
+  "files": {
+    "config.json": "./step-00036000-int8-v1/config.json",
+    "tokenizer.json": "./step-00036000-int8-v1/tokenizer.json",
+    "mel_encoder.onnx": "./step-00036000-int8-v1/mel_encoder.onnx",
+    "token_embed.onnx": "./step-00036000-int8-v1/token_embed.onnx",
+    "decoder_kv.int8.onnx": "./step-00036000-int8-v1/decoder_kv.int8.onnx"
+  }
+}
