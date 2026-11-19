@@ -327,3 +327,47 @@ test("constructor metadata failure releases every created session", async (t) =>
  await assert.rejects(WebScoreClient.create(ort,{baseUrl:'/models'}),/Invalid model metadata/);
  assert.equal(released,3);
 });
+
+test('fused greedy graph uses token IDs, never reads GPU prefix/KV, and releases buffers', async () => {
+  const released=[];const calls=[];
+  class Tensor { constructor(type,data,dims){this.type=type;this.data=data;this.dims=dims;this.location='cpu';} }
+  const gpu=(name,dims)=>({location:'gpu-buffer',dims,get data(){throw Error('GPU readback forbidden');},dispose(){assert.ok(!released.includes(name));released.push(name);}});
+  const prefix=gpu('prefix',[1,2,4]);let step=0;
+  const c=new WebScoreClient({Tensor},{tokenizer:makeFakeTokenizer(),arch:{dim:4,num_heads:2,num_kv_heads:1,num_layers:1},fusedGreedy:true,gpuKvCache:true,
+    encoderSession:{run:async()=>({cond_embeds:prefix})},embedSession:{run:async()=>{throw Error('Must not call embedding session');}},
+    decoderSession:{run:async feeds=>{calls.push({ids:[...feeds.input_ids.data],prefix:feeds.prefix_embeds.dims[1],position:Number(feeds.position_offset.data[0]),mask:[...feeds.attn_mask.data]});step++;return {next_token:new Tensor('int64',BigInt64Array.from([BigInt(step===1?4:2)]),[1]),present_k:gpu('k'+step,[1,1,1,2+step,2]),present_v:gpu('v'+step,[1,1,1,2+step,2])};}}});
+  c.mel={computeChunkLogMel:()=>({data:new Float32Array(1),dims:[1,1,1]})};
+  assert.deepEqual(await c.transcribeChunk(new Float32Array(1)),[4,2]);
+  assert.deepEqual(calls.map(x=>x.ids),[[1n],[4n]]);assert.deepEqual(calls.map(x=>x.prefix),[2,0]);
+  assert.deepEqual(calls.map(x=>x.position),[0,3]);assert.ok(calls[1].mask.every(x=>x===0));
+  assert.deepEqual(released.sort(),['k1','k2','prefix','v1','v2']);
+});
+test('fused greedy failure releases active GPU KV and never fabricates an EOS', async () => {
+  const released=[];class Tensor{constructor(type,data,dims){Object.assign(this,{type,data,dims,location:'cpu'});}}
+  const gpu=n=>({location:'gpu-buffer',dims:[1,1,1,3,2],dispose(){released.push(n);}});let step=0;
+  const c=new WebScoreClient({Tensor},{tokenizer:makeFakeTokenizer(),arch:{dim:4,num_heads:2,num_kv_heads:1,num_layers:1},fusedGreedy:true,gpuKvCache:true,
+    encoderSession:{run:async()=>({cond_embeds:new Tensor('float32',new Float32Array(8),[1,2,4])})},
+    decoderSession:{run:async()=>{if(step++)throw Error('device lost');return {next_token:new Tensor('int64',BigInt64Array.from([4n]),[1]),present_k:gpu('k'),present_v:gpu('v')};}}});
+  c.mel={computeChunkLogMel:()=>({data:new Float32Array(1),dims:[1,1,1]})};
+  await assert.rejects(c.transcribeChunk([]),/device lost/);assert.deepEqual(released.sort(),['k','v']);
+});
+test('fused greedy rejects special output IDs and detects requested KV residency failure', async () => {
+  class Tensor{constructor(type,data,dims){Object.assign(this,{type,data,dims,location:'cpu'});}}
+  for(const gpuKvCache of [false,true]) {
+    const c=new WebScoreClient({Tensor},{tokenizer:makeFakeTokenizer(),arch:{dim:4,num_heads:2,num_kv_heads:1,num_layers:1},fusedGreedy:true,gpuKvCache,
+      encoderSession:{run:async()=>({cond_embeds:new Tensor('float32',new Float32Array(8),[1,2,4])})},decoderSession:{run:async()=>({next_token:new Tensor('int64',BigInt64Array.from([0n]),[1]),present_k:new Tensor('float32',new Float32Array(12),[1,1,1,3,2]),present_v:new Tensor('float32',new Float32Array(12),[1,1,1,3,2])})}});
+    c.mel={computeChunkLogMel:()=>({data:new Float32Array(1),dims:[1,1,1]})};
+    await assert.rejects(c.transcribeChunk([]),gpuKvCache?/not on GPU/:/Invalid greedy token ID/);
+  }
+});
+test('fused loader loads encoder plus one decoder, not embedding/legacy decoder sessions', async () => {
+  const previous=globalThis.fetch;const calls=[];
+  try {
+    globalThis.fetch=async url=>({ok:true,json:async()=>url.endsWith('tokenizer.json')?makeFakeTokenizer():{dim:4}});
+    const ort={InferenceSession:{create:async(url,opts)=>{calls.push({url,opts});return {release:async()=>{}};}}};
+    const c=await WebScoreClient.create(ort,{baseUrl:'https://model.example/fused',fusedGreedy:true,useInt8:false,gpuKvCache:true,executionProviders:['webgpu']});
+    assert.equal(c.embedSession,null);assert.equal(calls.length,2);assert.ok(calls[1].url.endsWith('decoder_greedy.onnx'));
+    assert.equal(calls[0].opts.preferredOutputLocation.cond_embeds,'gpu-buffer');assert.equal(calls[1].opts.preferredOutputLocation.next_token,'cpu');
+    await c.dispose();await assert.rejects(WebScoreClient.create(ort,{fusedGreedy:true,useInt8:true}),/floating-point/);
+  } finally {globalThis.fetch=previous;}
+});
