@@ -1,0 +1,41 @@
+{
+  "version": "musescore-general-0.2-v1",
+  "license": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_License.md",
+  "banks": {
+    "drums": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_drums.sf2",
+      "sha256": "b6b486c414b22436508c026e95ef53d2c34ef57a493973abb7fe521ad012e957",
+      "bytes": 6451074
+    },
+    "guitars": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_guitars.sf2",
+      "sha256": "57c1988f3949324820001fedabf73b3a444db108b1946267e5c536e0fae504b3",
+      "bytes": 7619342
+    },
+    "keys": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_keys.sf2",
+      "sha256": "adeb93b47532ed6c66482584a771576c68687b8f8763082b0e8f7bf76bfa1487",
+      "bytes": 3326046
+    },
+    "piano": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_piano.sf2",
+      "sha256": "764fe1603a43da4b18831235243a78ea08b1f5a6487a54431272e58bf3faa91a",
+      "bytes": 100402770
+    },
+    "strings": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_strings.sf2",
+      "sha256": "45c6aa5df7529025ad2ab84affcdd19b11219f71d9a9bd818605258325093ccd",
+      "bytes": 20273450
+    },
+    "synth": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_synth.sf2",
+      "sha256": "b1c3e6bbb743d4fdbb3e27c8293f88ed4b39631667020c174a6ca349d4e6c850",
+      "bytes": 3403582
+    },
+    "winds": {
+      "url": "https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/MuseScore_General_winds.sf2",
+      "sha256": "387dd8cf7e54dc68d0b703a33e10838ec0b4a08f05e819d7491bcc81d13b81fe",
+      "bytes": 14393590
+    }
+  }
+}
