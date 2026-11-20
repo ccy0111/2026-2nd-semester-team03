@@ -41,20 +41,20 @@ The real song, model weights, and private inference traces are not included in t
 # Boundary modes
 
 `transcribePcm(pcm, { boundaryMode })` and `transcribeAudio(file, { boundaryMode })`
-take one optional mode. Existing callers do not change behavior:
+take one optional mode. Calls without a mode use Pitch Tie:
 
-- Omitted or `legacy`: BOS only in the first chunk, forced held-note prelude in
+- `legacy` (explicit compatibility mode): BOS only in the first chunk, forced held-note prelude in
   later chunks, with exact program and pitch matching.
 - `prelude-forcing`: same exact matching, but force a bare tie delimiter on the
   first chunk as well. Later chunks receive the sorted held notes and delimiter.
-- `pitch-tie`: BOS only on every normal attempt. Match the model's leading
+- Omitted or `pitch-tie`: BOS only on every normal attempt. Match the model's leading
   declarations to held notes by exact program and pitch first, then by pitch
   only when one unmatched note and one unmatched declaration remain. The
   original note retains its program; a changed program is only a chunk-local
   alias for note-off or retrigger. Ambiguous and missing ties close at the
   boundary; orphan declarations and note-offs do not generate an onset.
 
-Both opt-in modes carry the program from a valid leading prelude into the
+Pitch Tie and explicit prelude forcing carry the program from a valid leading prelude into the
 body, but begin with no velocity and no default program. Pitches without
 both selectors established are ignored. A malformed prefix before a late
 delimiter is discarded. With no delimiter, explicit body events still
@@ -68,5 +68,5 @@ The empty delimiter on this exceptional retry does not force previous notes.
 
 The existing browser `ModelService.transcribe(file, onProgress, { boundaryMode })`
 forwards the optional choice and returns `{ notes, chunkStatuses }`. Existing
-UI calls keep the legacy mode. Consumers may use the returned statuses to
+UI calls without a mode use Pitch Tie. Consumers may use the returned statuses to
 distinguish a skipped chunk from silence.

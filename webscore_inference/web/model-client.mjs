@@ -242,7 +242,7 @@ export class WebScoreClient {
     }
   }
 
-  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "legacy" } = {}) {
+  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "pitch-tie" } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     if (this.transcribing) throw new Error("A transcription is already running");
     validateTokenLimit(maxGenLen);

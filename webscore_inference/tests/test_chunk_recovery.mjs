@@ -6,7 +6,7 @@ const held=[10,8,4,6,5,2], ended=[10,8,4,6,11,9,7,11,2];
 function client(run){const c=new WebScoreClient({}, {tokenizer:tok,arch:{}});c.transcribeChunk=run;return c;}
 test('normal chunks preserve carry and add ok statuses without extra calls',async()=>{
  const calls=[];const c=client(async(_,opts)=>{calls.push(opts);return calls.length===1?held:[4,5,10,9,4,7,5,2];});
- const r=await c.transcribePcm(new Float32Array(160000));assert.equal(calls.length,2);assert.deepEqual(calls[1].promptTokens,[4,5,10]);assert.deepEqual(r.chunkStatuses.map(x=>x.status),['ok','ok']);assert.equal(r.notes[0].offset,6);
+ const r=await c.transcribePcm(new Float32Array(160000),{boundaryMode:"legacy"});assert.equal(calls.length,2);assert.deepEqual(calls[1].promptTokens,[4,5,10]);assert.deepEqual(r.chunkStatuses.map(x=>x.status),['ok','ok']);assert.equal(r.notes[0].offset,6);
 });
 test('recover only affected chunk, drop old carry and preserve previous/following notes',async()=>{
  let n=0;const calls=[],progress=[];const c=client(async(_,opts)=>{calls.push(opts);n++;if(n===2)throw new TokenLimitError();return n===1?held:ended;});
@@ -15,7 +15,7 @@ test('recover only affected chunk, drop old carry and preserve previous/followin
 });
 for(const failedIndex of [0,1,2])test(`double failure at chunk ${failedIndex} skips only that interval`,async()=>{
  let call=0;const calls=[];const c=client(async(_,o)=>{calls.push(o);const current=call++;if(current===failedIndex||current===failedIndex+1)throw new TokenLimitError();return held;});
- const r=await c.transcribePcm(new Float32Array(240000));assert.equal(call,4);assert.deepEqual(r.tokensByChunk[failedIndex],[]);assert.equal(r.chunkStatuses[failedIndex].status,'failed');assert.equal(r.chunkStatuses[failedIndex].attempts,2);assert.equal(r.chunkStatuses.length,3);assert.ok(r.notes.every(n=>n.offset<=15));if(failedIndex<2)assert.deepEqual(calls[failedIndex+2].promptTokens,[10]);
+ const r=await c.transcribePcm(new Float32Array(240000),{boundaryMode:"legacy"});assert.equal(call,4);assert.deepEqual(r.tokensByChunk[failedIndex],[]);assert.equal(r.chunkStatuses[failedIndex].status,'failed');assert.equal(r.chunkStatuses[failedIndex].attempts,2);assert.equal(r.chunkStatuses.length,3);assert.ok(r.notes.every(n=>n.offset<=15));if(failedIndex<2)assert.deepEqual(calls[failedIndex+2].promptTokens,[10]);
 });
 test('a short final failed chunk reports actual time instead of padding',async()=>{
  const c=client(async()=>{throw new TokenLimitError();});const r=await c.transcribePcm(new Float32Array(16000));assert.equal(r.chunkStatuses[0].endSec,1);assert.deepEqual(r.notes,[]);assert.equal(r.tokensByChunk.length,1);

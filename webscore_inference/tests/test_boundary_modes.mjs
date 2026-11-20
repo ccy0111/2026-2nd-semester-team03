@@ -85,9 +85,9 @@ function makeClient(run) {
   c.transcribeChunk = run;
   return c;
 }
-test('boundary modes send mutually exclusive normal prompts and keep legacy default', async () => {
+test('boundary modes send mutually exclusive normal prompts and default to pitch tie', async () => {
   for (const [mode, prompts] of [
-    [undefined, [[],tokens('inst:0','pitch:60','tie').slice(0,-1)]],
+    [undefined, [[],[]]],
     ['legacy', [[],tokens('inst:0','pitch:60','tie').slice(0,-1)]],
     ['prelude-forcing',[tokens('tie').slice(0,-1),tokens('inst:0','pitch:60','tie').slice(0,-1)]],
     ['pitch-tie',[[],[]]],
