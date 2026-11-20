@@ -242,10 +242,11 @@ export class WebScoreClient {
     }
   }
 
-  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null } = {}) {
+  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "legacy" } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     if (this.transcribing) throw new Error("A transcription is already running");
     validateTokenLimit(maxGenLen);
+    if (!["legacy", "prelude-forcing", "pitch-tie"].includes(boundaryMode)) throw new RangeError("Unsupported boundaryMode");
     throwIfAborted(signal);
     this.transcribing = true;
     try {
@@ -258,7 +259,8 @@ export class WebScoreClient {
       for (let idx = 0; idx < chunks.length; idx++) {
         throwIfAborted(signal);
         const { pcm, startSec } = chunks[idx];
-        const promptTokens = idx > 0 ? encodeTiePrologue(openNotes, this.lookup) : [];
+        const forcePrelude = boundaryMode === "prelude-forcing" || (boundaryMode === "legacy" && idx > 0);
+        const promptTokens = forcePrelude ? encodeTiePrologue(openNotes, this.lookup) : [];
         const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, pcm16k.length / 16000), status: "ok", attempts: 1, boundaryReset: false };
         let tokens;
         try {
@@ -286,7 +288,7 @@ export class WebScoreClient {
         throwIfAborted(signal);
         tokensByChunk.push(tokens);
         if (chunkStatus.status !== "failed") {
-          const decoded = decodeChunkTokens(tokens, this.lookup, { chunkStartSec: startSec, openNotes });
+          const decoded = decodeChunkTokens(tokens, this.lookup, { chunkStartSec: startSec, openNotes, boundaryMode });
           allNotes.push(...decoded.completed);
           openNotes = decoded.nextOpenNotes;
         }

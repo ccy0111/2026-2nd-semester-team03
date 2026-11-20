@@ -43,7 +43,9 @@ export function encodeTiePrologue(openNotes, lookup) {
   return tokens;
 }
 
-export function decodeChunkTokens(tokenIds, lookup, { chunkStartSec = 0.0, openNotes = [] } = {}) {
+export function decodeChunkTokens(tokenIds, lookup, { chunkStartSec = 0.0, openNotes = [], boundaryMode = "legacy" } = {}) {
+  if (boundaryMode === "pitch-tie") return decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes);
+  if (boundaryMode !== "legacy" && boundaryMode !== "prelude-forcing") throw new RangeError("Unsupported boundaryMode");
   const completed = [];
   const active = new Map();
   for (const note of openNotes) {
@@ -109,6 +111,98 @@ export function decodeChunkTokens(tokenIds, lookup, { chunkStartSec = 0.0, openN
     }
   }
 
+  return { completed, nextOpenNotes: [...active.values()], nextChunkStartSec: chunkStartSec + CHUNK_SEC };
+}
+
+// The model may name a held note with the wrong program. Preserve its actual
+// identity; the guessed program is an alias only until this chunk ends.
+function decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes) {
+  const completed = [];
+  const keyOf = (program, pitch) => `${program}:${pitch}`;
+  const active = new Map(openNotes.map(note => [keyOf(note.program, note.pitch), { ...note }]));
+  const aliases = new Map();
+  const reverseAliases = new Map();
+  const declarations = new Map();
+  let curInst = 0;
+  let curVel = 1;
+  let curTime = 0;
+  const eos = tokenIds.indexOf(lookup.eosId);
+  const end = eos < 0 ? tokenIds.length : eos;
+  let body = 0;
+  let preludeInst = 0;
+  for (let i = 0; i < end; i++) {
+    const event = lookup.idToEvent[tokenIds[i]];
+    if (event?.kind === "inst") preludeInst = event.value;
+    else if (event?.kind === "pitch") declarations.set(keyOf(preludeInst, event.value), event.value);
+    else {
+      if (event?.kind === "tie") {
+        body = i + 1;
+        curInst = preludeInst;
+      }
+      break;
+    }
+  }
+  if (body === 0) declarations.clear();
+
+  const matched = new Set();
+  const remainingDecl = new Map();
+  const remainingNotes = new Map();
+  const add = (map, pitch, key) => {
+    if (!map.has(pitch)) map.set(pitch, []);
+    map.get(pitch).push(key);
+  };
+  // Reserve ALL exact matches before considering any pitch-only aliases.
+  for (const [key, pitch] of declarations) {
+    if (active.has(key)) matched.add(key);
+    else add(remainingDecl, pitch, key);
+  }
+  for (const [key, note] of active) {
+    if (!matched.has(key)) add(remainingNotes, note.pitch, key);
+  }
+  for (const [pitch, guesses] of remainingDecl) {
+    const candidates = remainingNotes.get(pitch);
+    if (guesses.length !== 1 || candidates?.length !== 1) continue;
+    const [alias] = guesses;
+    const [original] = candidates;
+    aliases.set(alias, original);
+    reverseAliases.set(original, alias);
+    matched.add(original);
+  }
+  function close(key, time) {
+    const note = active.get(key);
+    if (!note) return;
+    note.offset = Math.max(note.onset + 0.01, time);
+    completed.push(note);
+    active.delete(key);
+    const alias = reverseAliases.get(key);
+    if (alias !== undefined) {
+      aliases.delete(alias);
+      reverseAliases.delete(key);
+    }
+  }
+  for (const key of active.keys()) {
+    if (!matched.has(key)) close(key, chunkStartSec);
+  }
+
+  for (let i = body; i < end; i++) {
+    const ev = lookup.idToEvent[tokenIds[i]];
+    if (!ev) continue;
+    if (ev.kind === "time") curTime = ev.value / FRAME_RATE_HZ;
+    else if (ev.kind === "inst") curInst = ev.value;
+    else if (ev.kind === "vel") curVel = ev.value;
+    else if (ev.kind === "drum") {
+      const t = chunkStartSec + curTime;
+      completed.push({ isDrum: true, program: DRUM_PROGRAM, pitch: ev.value, onset: t, offset: t + 0.05 });
+    } else if (ev.kind === "pitch") {
+      const t = chunkStartSec + curTime;
+      const key = keyOf(curInst, ev.value);
+      const heldKey = active.has(key) ? key : aliases.get(key);
+      if (heldKey !== undefined) close(heldKey, t);
+      if (curVel > 0) {
+        active.set(key, { isDrum: false, program: curInst, pitch: ev.value, onset: t, offset: t });
+      }
+    }
+  }
   return { completed, nextOpenNotes: [...active.values()], nextChunkStartSec: chunkStartSec + CHUNK_SEC };
 }
 
