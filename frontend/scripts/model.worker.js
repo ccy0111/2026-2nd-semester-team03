@@ -13,7 +13,8 @@
 //   { type: "error", message }
 // ==========================================================
 
-const ORT_VERSION = "1.20.1";
+// Keep the JS loader and WASM assets pinned together. 1.31.1 fixes V2 encoder NaNs in 1.20.1.
+const ORT_VERSION = "1.31.1";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 const MODEL_MODULE_URL = "/inference/model-version-client.mjs";
 
