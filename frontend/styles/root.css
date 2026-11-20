@@ -1,0 +1,115 @@
+/* ==========================================================
+	root.css
+	- 디자인 변수(색, 간격, 글꼴)와 여러 곳에서 재사용하는 공통 class
+	- class 이름은 소문자 + 하이픈(-) 연결 (예: text-main, bg-primary)
+	========================================================== */
+
+:root {
+	/* 색상 */
+	--color-primary: #4c6ef5;
+	--color-primary-dark: #3b5bdb;
+	--color-main: #212529;
+	--color-sub: #868e96;
+	--color-white: #ffffff;
+	--color-base: #f1f3f5;
+	--color-surface: #ffffff;
+	--color-line: #dee2e6;
+	--color-success: #2b8a3e;
+	--color-error: #e03131;
+
+	/* 악보(피아노롤) 색상 */
+	--color-note: #4c6ef5;
+	--color-note-line: #364fc7;
+	--color-row-white: #ffffff;
+	--color-row-black: #f1f3f5;
+	--color-grid: #e9ecef;
+
+	/* 간격 */
+	--space-xs: 4px;
+	--space-sm: 8px;
+	--space-md: 16px;
+	--space-lg: 24px;
+	--space-xl: 40px;
+
+	/* 모서리, 그림자 */
+	--radius-sm: 6px;
+	--radius-md: 12px;
+	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+	/* 글꼴 */
+	--font-base: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+	--font-size-sm: 13px;
+	--font-size-md: 15px;
+	--font-size-lg: 20px;
+	--font-size-xl: 28px;
+}
+
+/* ---------- 기본 초기화 ---------- */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	font-family: var(--font-base);
+	font-size: var(--font-size-md);
+	line-height: 1.5;
+}
+
+h1,
+h2,
+p {
+	margin: 0;
+}
+
+/* ---------- 글자색 ---------- */
+.text-main { color: var(--color-main); }
+.text-sub { color: var(--color-sub); }
+.text-white { color: var(--color-white); }
+.text-primary { color: var(--color-primary); }
+.text-success { color: var(--color-success); }
+.text-error { color: var(--color-error); }
+
+/* ---------- 배경색 ---------- */
+.bg-base { background-color: var(--color-base); }
+.bg-surface { background-color: var(--color-surface); }
+.bg-primary { background-color: var(--color-primary); }
+
+/* ---------- 레이아웃 ---------- */
+.flex-row {
+	display: flex;
+	align-items: center;
+}
+
+.flex-col {
+	display: flex;
+	flex-direction: column;
+}
+
+.gap-sm { gap: var(--space-sm); }
+.gap-md { gap: var(--space-md); }
+
+/* ---------- 공통 버튼 ---------- */
+.btn {
+	padding: var(--space-sm) var(--space-md);
+	border: none;
+	border-radius: var(--radius-sm);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.15s;
+}
+
+.btn:hover:not(:disabled) {
+	opacity: 0.85;
+}
+
+.btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+/* ---------- 상태 표시 (JS가 붙였다 뗐다 함) ---------- */
+.is-hidden { display: none !important; }

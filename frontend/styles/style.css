@@ -1,0 +1,157 @@
+/* ==========================================================
+	style.css
+	- 화면별(컴포넌트별) 디자인
+	- 색, 간격 값은 root.css의 변수를 사용
+	========================================================== */
+
+/* ---------- 헤더 ---------- */
+.app-header {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: var(--space-xl) var(--space-md) var(--space-md);
+}
+
+.app-title {
+	margin-bottom: var(--space-xs);
+	font-size: var(--font-size-xl);
+}
+
+/* ---------- 본문 ---------- */
+.app-main {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-md);
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: 0 var(--space-md) var(--space-xl);
+}
+
+.panel {
+	padding: var(--space-lg);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-sm);
+}
+
+.panel-title {
+	margin-bottom: var(--space-md);
+	font-size: var(--font-size-lg);
+}
+
+/* ---------- 입력 영역 ---------- */
+.input-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-sm);
+}
+
+.file-input {
+	flex: 1;
+	min-width: 220px;
+	padding: var(--space-sm);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+	font: inherit;
+}
+
+.status-text {
+	margin-top: var(--space-sm);
+	font-size: var(--font-size-sm);
+}
+
+/* ---------- 출력 영역 (피아노롤) ---------- */
+.score-view {
+	overflow-x: auto;       /* 곡이 길면 가로 스크롤 */
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+	padding: var(--space-sm);
+	min-height: 120px;
+}
+
+.score-svg {
+	display: block;
+}
+
+.score-row-white { fill: var(--color-row-white); }
+.score-row-black { fill: var(--color-row-black); }
+
+.score-grid-line {
+	stroke: var(--color-grid);
+	stroke-width: 1;
+}
+
+.score-label {
+	fill: var(--color-sub);
+	font-size: 11px;
+}
+
+.score-note {
+	fill: var(--color-note);
+	stroke: var(--color-note-line);
+	stroke-width: 0.5;
+}
+
+/* ---------- 로딩바 ---------- */
+.progress {
+	margin-top: var(--space-md);
+}
+
+.progress-info {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: var(--space-xs);
+	font-size: var(--font-size-sm);
+}
+
+.progress-percent {
+	font-weight: 600;
+}
+
+.progress-track {
+	height: 10px;
+	overflow: hidden;
+	border-radius: 999px;
+	background-color: var(--color-base);
+}
+
+.progress-fill {
+	width: 0;
+	height: 100%;
+	border-radius: 999px;
+	background-color: var(--color-primary);
+	transition: width 0.4s ease;
+}
+
+/* 진행 중: 줄무늬가 흘러가서 멈춘 게 아니라는 걸 보여 줌 */
+.progress.is-running .progress-fill {
+	background-image: linear-gradient(
+		45deg,
+		rgba(255, 255, 255, 0.25) 25%,
+		transparent 25%,
+		transparent 50%,
+		rgba(255, 255, 255, 0.25) 50%,
+		rgba(255, 255, 255, 0.25) 75%,
+		transparent 75%,
+		transparent
+	);
+	background-size: 20px 20px;
+	animation: progress-stripe 1s linear infinite;
+}
+
+/* 0%일 때도 움직임이 보이도록 최소 너비 */
+.progress.is-running .progress-fill {
+	min-width: 4%;
+}
+
+.progress.is-done .progress-fill {
+	background-color: var(--color-success);
+}
+
+.progress.is-error .progress-fill {
+	background-color: var(--color-error);
+}
+
+@keyframes progress-stripe {
+	from { background-position: 0 0; }
+	to { background-position: 20px 0; }
+}

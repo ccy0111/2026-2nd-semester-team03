@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>채보 플랫폼</title>
+
+	<!-- 백엔드가 frontend/ 폴더를 /static 경로로 제공함 -->
+	<link rel="stylesheet" href="/static/styles/root.css">
+	<link rel="stylesheet" href="/static/styles/style.css">
+
+	<!-- ONNX Runtime Web은 scripts/model.worker.js 안에서 불러옴 -->
+	<script type="module" src="/static/scripts/main.js"></script>
+</head>
+<body class="bg-base text-main">
+	<header class="app-header">
+		<h1 class="app-title">채보 플랫폼 (기능 우선)</h1>
+		<p class="text-sub">MP3를 고르면 브라우저 안에서 바로 채보합니다. 음원은 서버로 전송되지 않습니다.</p>
+		<span class="text-sub">현재 원본 음악을 넣으면 채보가 중간에 막힙니다.</span>
+	</header>
+
+	<main class="app-main">
+		<!-- 입력 영역 -->
+		<section class="panel bg-surface">
+			<h2 class="panel-title">1. 음원 선택</h2>
+			<div class="input-row">
+				<input type="file" id="audio-input" class="file-input" accept=".mp3,audio/mpeg">
+				<button type="button" id="start-button" class="btn bg-primary text-white" disabled>채보 시작</button>
+			</div>
+			<p id="status-text" class="status-text text-sub">모델 준비 중...</p>
+
+			<!-- 채보 진행 로딩바 (채보 시작 전에는 숨김) -->
+			<div id="progress-bar" class="progress is-hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+				<div class="progress-info">
+					<span class="progress-label text-sub"></span>
+					<span class="progress-percent text-primary"></span>
+				</div>
+				<div class="progress-track">
+					<div class="progress-fill"></div>
+				</div>
+			</div>
+			<!-- TODO(지윤): 재시도 버튼, 원본 MP3 다운로드 링크 -->
+		</section>
+
+		<!-- 출력 영역 -->
+		<section class="panel bg-surface">
+			<h2 class="panel-title">2. 채보 결과</h2>
+			<!-- TODO(지윤): 재생 컨트롤(<audio>) -->
+			<div id="score-view" class="score-view">
+				<p class="text-sub">채보가 끝나면 여기에 음표가 표시됩니다.</p>
+			</div>
+		</section>
+	</main>
+</body>
+</html>
