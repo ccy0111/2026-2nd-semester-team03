@@ -113,6 +113,18 @@ async function transcribeFile(file, onProgress) {
 
 원본 MP3 다운로드는 프론트엔드가 선택한 `File`의 객체 URL과 다운로드 링크로 구현한다. 객체 URL과 모델 세션의 해제도 프론트엔드가 담당한다. [브라우저 객체 URL 문서](https://developer.mozilla.org/en-US/docs/Web/API/URL/createObjectURL_static)
 
+## 채보 결과 재생 (프론트 연결용)
+
+[독립 SoundFont 재생 모듈](../soundfont-playback/README.md)은 기존 모델의 `notes`를 그대로 받는다. 추론 API, 원본 MP3 재생·다운로드, `midiBytes` 내보내기는 변경하지 않는다.
+
+| 인터페이스 | 역할 |
+| --- | --- |
+| `groupPlaybackNotes(notes)` | 악기군별 트랙과 필요 뱅크 목록을 만든다. 재생에 쓰지 않는 GM 번호는 `unsupportedPrograms`에 반환한다. |
+| `createGroupedPlayer({ context, workletUrl, banks, destination })` | 앱의 AudioContext 및 같은 origin의 Worklet과 연결한다. 음소거를 쓰려면 출력 `destination`에 GainNode를 전달한다. |
+| `player.prepare(notes)` | 최초 재생 버튼에서 호출한다. 필요한 뱅크만 내려받고 재생용 MIDI를 구성한다. 이후 `play()`, `pause()`, `seek(seconds)`, `currentTime`, `duration`, `setMuted(boolean)`을 사용한다. 새 결과를 열기 전에 `dispose()`한다. |
+
+[SoundFont CDN 목록](https://models.midistudio.app/web-student-kd/releases/soundfont-musescore-general-0.2-v1/soundfonts.json)은 모델 `current.json`과 독립적이다. 각 뱅크의 `url`, `bytes`, `sha256`으로 다운로드를 검증하며 R2 키나 서명 URL은 필요 없다. 검증된 파일은 IndexedDB에 저장하고, 저장이 막히거나 공간이 부족해도 네트워크로 재생할 수 있다. 다운로드 또는 해시 검증에 실패하면 채보 화면과 원본 파일은 유지하고 재생만 다시 시도할 수 있게 한다.
+
 ## 오류 응답과 복구
 
 | 구간 | 오류 | 처리 담당과 복구 |
