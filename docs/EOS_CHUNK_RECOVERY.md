@@ -1,6 +1,6 @@
 # Bounded recovery for a chunk that never emits EOS
 
-This change is independent of the FP16 optimizer and teammate UI work. It does not change weights, model URLs, precision, defaults for successful decoding, CDN files, frontend code, or deployment.
+This change does not change weights, model URLs, precision, default decoding, CDN files, or deployment. The existing browser worker and service forward the optional boundary mode and result statuses without changing the UI.
 
 `transcribeChunk` throws the exported `TokenLimitError` (`code: TOKEN_LIMIT_EXHAUSTED`) if the model fails to emit EOS within `maxGenLen`. Partial generated tokens are not returned. The final unused token is not sent through another embedding call after the generation budget is exhausted.
 
@@ -38,3 +38,29 @@ The private actual-song sandbox investigation used step-53,500 INT8 and the base
 These are observations for one song, not an assertion of universal recovery. They do not reproduce the exact reported progress indicators: 49% with the older model and 97% with the newer model. The test uses fixed audio intervals, and FFmpeg 16 kHz PCM may differ from browser AudioContext resampling.
 
 The real song, model weights, and private inference traces are not included in this PR. Tests cover normal carry, recovery, double failure at beginning/middle/end, padding duration, error filtering, cancellation, progress errors, and the actual token-cap loop. No generated models or frontend changes are needed for this policy.
+# Boundary modes
+
+`transcribePcm(pcm, { boundaryMode })` and `transcribeAudio(file, { boundaryMode })`
+take one optional mode. Existing callers do not change behavior:
+
+- Omitted or `legacy`: BOS only in the first chunk, forced held-note prelude in
+  later chunks, with exact program and pitch matching.
+- `prelude-forcing`: same exact matching, but force a bare tie delimiter on the
+  first chunk as well. Later chunks receive the sorted held notes and delimiter.
+- `pitch-tie`: BOS only on every normal attempt. Match the model's leading
+  declarations to held notes by exact program and pitch first, then by pitch
+  only when one unmatched note and one unmatched declaration remain. The
+  original note retains its program; a changed program is only a chunk-local
+  alias for note-off or retrigger. Ambiguous and missing ties close at the
+  boundary; orphan declarations and note-offs do not generate an onset.
+
+The independent prompts of Pitch Tie permit batching with an appropriate
+runtime, but choosing the mode alone does not imply batch execution or a
+speedup. In all modes an exhausted chunk is retried once with a fresh KV cache,
+empty held notes and a bare tie delimiter; no failed attempt's tokens are kept.
+The empty delimiter on this exceptional retry does not force previous notes.
+
+The existing browser `ModelService.transcribe(file, onProgress, { boundaryMode })`
+forwards the optional choice and returns `{ notes, chunkStatuses }`. Existing
+UI calls keep the legacy mode. Consumers may use the returned statuses to
+distinguish a skipped chunk from silence.

@@ -5,11 +5,11 @@
 //
 // 메인 → 워커 메시지
 //   { type: "load" }
-//   { type: "transcribe", pcm: Float32Array, maxGenLen }   // 16kHz 모노 음원, 토큰 한도(선택)
+//   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode }
 // 워커 → 메인 메시지
 //   { type: "loaded" }
 //   { type: "progress", progress: { completedChunks, totalChunks } }
-//   { type: "result", notes }
+//   { type: "result", notes, chunkStatuses }
 //   { type: "error", message }
 // ==========================================================
 
@@ -32,8 +32,8 @@ self.addEventListener("message", async (event) => {
 			self.postMessage({ type: "loaded" });
 		}
 		if (type === "transcribe") {
-			const notes = await transcribe(event.data.pcm, event.data.maxGenLen);
-			self.postMessage({ type: "result", notes });
+			const result = await transcribe(event.data.pcm, event.data.maxGenLen, event.data.boundaryMode);
+			self.postMessage({ type: "result", ...result });
 		}
 	} catch (error) {
 		console.error(error);
@@ -50,7 +50,7 @@ async function loadModel() {
 	});
 }
 
-async function transcribe(pcm, maxGenLen) {
+async function transcribe(pcm, maxGenLen, boundaryMode) {
 	if (!model) {
 		throw new Error("모델이 아직 준비되지 않았습니다.");
 	}
@@ -63,6 +63,9 @@ async function transcribe(pcm, maxGenLen) {
 	if (maxGenLen) {
 		options.maxGenLen = maxGenLen;
 	}
+	if (boundaryMode !== undefined) {
+		options.boundaryMode = boundaryMode;
+	}
 	const result = await model.transcribePcm(pcm, options);
-	return result.notes;
+	return { notes: result.notes, chunkStatuses: result.chunkStatuses };
 }
