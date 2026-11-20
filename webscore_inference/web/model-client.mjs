@@ -47,9 +47,7 @@ function buildCausalMask(seqLen, pastLen) {
   for (let r = 0; r < seqLen; r++) {
     const maxCol = pastLen + r;
     const rowOff = r * total;
-    for (let c = 0; c < total; c++) {
-      mask[rowOff + c] = c <= maxCol ? 0.0 : -1e9;
-    }
+    mask.fill(-1e9, rowOff + maxCol + 1, rowOff + total);
   }
   return mask;
 }
@@ -146,7 +144,7 @@ export class WebScoreClient {
 
   async embedTokenIds(ids) {
     if (!this.cacheEmbeddings) {
-      const input_ids = new this.ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]);
+      const input_ids = new this.ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]);
       return (await this.embedSession.run({ input_ids })).token_embeds;
     }
     if (!this.embeddingTable) {
@@ -196,13 +194,19 @@ export class WebScoreClient {
     let stepEmbeds = new this.ort.Tensor("float32", prefillData, [1, prefillLen, hiddenDim]);
     let posOffset = 0;
     const generated = [...promptTokens];
+    // Single-token causal rows are all zero. Reuse bounded storage for their
+    // views instead of allocating and clearing an O(past length) buffer per token.
+    const decodeMask = maxGenLen > 1 ? new Float32Array(prefillLen + Math.min(maxGenLen - 1, 4096)) : null;
 
     try {
       for (let step = 0; step < maxGenLen; step++) {
         throwIfAborted(signal);
         const seqLen = stepEmbeds.dims[1];
         const pastLen = pastK.dims[3];
-        const maskTensor = new this.ort.Tensor("float32", buildCausalMask(seqLen, pastLen), [1, 1, seqLen, pastLen + seqLen]);
+        const total = pastLen + seqLen;
+        const maskData = step > 0 && seqLen === 1 && total <= decodeMask.length
+          ? decodeMask.subarray(0, total) : buildCausalMask(seqLen, pastLen);
+        const maskTensor = new this.ort.Tensor("float32", maskData, [1, 1, seqLen, total]);
         const posTensor = new this.ort.Tensor("int64", BigInt64Array.from([BigInt(posOffset)]), [1]);
 
         const decOut = await this.decoderSession.run({

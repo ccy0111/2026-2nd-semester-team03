@@ -107,6 +107,7 @@ test("WebScoreClient executes chunk inference loop with mock ONNX runtime", asyn
   }
 
   let decodeCalls = 0;
+  let decodeMaskBuffer;
   const sequenceToEmit = [
     lookup.eventToId.get("time:10"),
     lookup.eventToId.get("drum:36"),
@@ -129,10 +130,18 @@ test("WebScoreClient executes chunk inference loop with mock ONNX runtime", asyn
         },
       },
       decoderSession: {
-        async run({ inputs_embeds, past_k }) {
+        async run({ inputs_embeds, past_k, attn_mask }) {
           const seqLen = inputs_embeds.dims[1];
           const pastLen = past_k.dims[3];
           const totalLen = pastLen + seqLen;
+          assert.deepEqual(attn_mask.dims, [1, 1, seqLen, totalLen]);
+          for (let r = 0; r < seqLen; r++) {
+            for (let c = 0; c < totalLen; c++) {
+              assert.equal(attn_mask.data[r * totalLen + c], c <= pastLen + r ? 0 : -1e9);
+            }
+          }
+          if (seqLen === 1 && decodeMaskBuffer) assert.equal(attn_mask.data.buffer, decodeMaskBuffer);
+          else if (seqLen === 1) decodeMaskBuffer = attn_mask.data.buffer;
           const logits = new Float32Array(seqLen * tok.vocab_size).fill(-10);
           const emitId = sequenceToEmit[decodeCalls++];
           logits[(seqLen - 1) * tok.vocab_size + emitId] = 10.0;
@@ -326,4 +335,17 @@ test("constructor metadata failure releases every created session", async (t) =>
  const ort={InferenceSession:{create:async()=>({release:async()=>released++})}};
  await assert.rejects(WebScoreClient.create(ort,{baseUrl:'/models'}),/Invalid model metadata/);
  assert.equal(released,3);
+});
+
+test("mel scratch reuse cannot retain samples after a shorter input or alias returned mel", () => {
+  const reused = new WebMelProcessor();
+  const full = Float32Array.from({length:80000}, (_, i) => Math.sin(i * 0.019));
+  const out = reused.computeChunkLogMel(full).data;
+  const outSnapshot = Buffer.from(new Uint8Array(out.buffer));
+  for (const input of [Float32Array.of(.7, -.3, .5), new Float32Array(0)]) {
+    const actual = reused.computeChunkLogMel(input).data;
+    const expected = new WebMelProcessor().computeChunkLogMel(input).data;
+    assert.equal(Buffer.compare(Buffer.from(actual.buffer), Buffer.from(expected.buffer)), 0);
+  }
+  assert.equal(Buffer.compare(Buffer.from(out.buffer), outSnapshot), 0);
 });
