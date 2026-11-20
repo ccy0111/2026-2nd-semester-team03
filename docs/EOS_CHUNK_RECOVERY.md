@@ -54,6 +54,12 @@ take one optional mode. Existing callers do not change behavior:
   alias for note-off or retrigger. Ambiguous and missing ties close at the
   boundary; orphan declarations and note-offs do not generate an onset.
 
+Both opt-in modes carry the program from a valid leading prelude into the
+body, but begin with no velocity and no default program. Pitches without
+both selectors established are ignored. A malformed prefix before a late
+delimiter is discarded. With no delimiter, explicit body events still
+decode, but no notes are tied across that boundary. Legacy parsing is unchanged.
+
 The independent prompts of Pitch Tie permit batching with an appropriate
 runtime, but choosing the mode alone does not imply batch execution or a
 speedup. In all modes an exhausted chunk is retried once with a fresh KV cache,

@@ -41,7 +41,7 @@ test('pitch tie rejects ambiguity on either side and ignores orphan declarations
 
 test('pitch alias closes the original on noteoff; original and alias retriggers start real body notes', () => {
   for (const program of [0, 2]) {
-    const events = ['inst:2','pitch:60','tie','time:100',`inst:${program}`,'pitch:60','inst:2','vel:0','pitch:60'];
+    const events = ['inst:2','pitch:60','tie','time:100',`inst:${program}`,'vel:1','pitch:60','inst:2','vel:0','pitch:60'];
     const result = pitchTie(events, [held(0)]);
     assert.deepEqual(pitches(result.completed).slice(0,1), [[0,60,4,6]]);
     if (program === 0) assert.deepEqual(pitches(result.nextOpenNotes), [[0,60,6,6]]);
@@ -57,8 +57,27 @@ test('pitch aliases last one chunk and missing/late tie does not consume body or
   const second = decodeChunkTokens(tokens('inst:2','pitch:60','tie','time:100','vel:0','pitch:60'), lookup,
     { chunkStartSec:10, openNotes:first.nextOpenNotes, boundaryMode:'pitch-tie' });
   assert.deepEqual(pitches(second.completed), [[0,60,4,11]]);
-  const late = pitchTie(['time:0','inst:1','pitch:62','tie','time:100','vel:0','pitch:62'], [held(0)]);
-  assert.deepEqual(pitches(late.completed), [[0,60,4,5],[1,62,5,6]]);
+  const late = pitchTie(['inst:1','pitch:62','time:0','vel:1','pitch:62','tie','time:100','inst:1','vel:0','pitch:62'], [held(0)]);
+  assert.deepEqual(pitches(late.completed), [[0,60,4,5]]);
+});
+
+test('explicit modes carry prelude program but ignore pitches before program or velocity is set', () => {
+  for (const boundaryMode of ['prelude-forcing','pitch-tie']) {
+    const decode = (...events) => decodeChunkTokens(tokens(...events), lookup, {boundaryMode,openNotes:[held(1)],chunkStartSec:5});
+    const good = decode('inst:1','pitch:60','tie','time:100','pitch:62','pitch:60','vel:0','pitch:60');
+    assert.deepEqual(pitches(good.completed),[[1,60,4,6]]);
+    assert.deepEqual(good.nextOpenNotes,[]);
+    const emptyPrelude = decode('tie','time:100','vel:1','pitch:62','inst:2','pitch:60');
+    assert.deepEqual(pitches(emptyPrelude.nextOpenNotes),[[2,60,6,6]]);
+    const noTie = decode('time:0','inst:2','pitch:60','vel:1','pitch:62','time:100','vel:0','pitch:62');
+    assert.deepEqual(pitches(noTie.completed),[[1,60,4,5],[2,62,5,6]]);
+  }
+  const strict = decodeChunkTokens(tokens('inst:2','pitch:60','tie'),lookup,
+    { boundaryMode:'prelude-forcing',openNotes:[held(1)],chunkStartSec:5 });
+  assert.deepEqual(pitches(strict.completed),[[1,60,4,5]]);
+  assert.deepEqual(strict.nextOpenNotes,[]);
+  const legacy = decodeChunkTokens(tokens('tie','pitch:62'),lookup);
+  assert.deepEqual(pitches(legacy.nextOpenNotes),[[0,62,0,0]]);
 });
 
 function makeClient(run) {
@@ -76,7 +95,7 @@ test('boundary modes send mutually exclusive normal prompts and keep legacy defa
     const seen = [];
     const c = makeClient(async (_, {promptTokens}) => {
       seen.push(promptTokens);
-      if (seen.length === 1) return tokens('tie','time:0','inst:0','pitch:60');
+      if (seen.length === 1) return tokens('tie','time:0','inst:0','vel:1','pitch:60');
       return tokens('inst:0','pitch:60','tie','time:100','vel:0','pitch:60');
     });
     const out = await c.transcribePcm(new Float32Array(160000), {boundaryMode:mode});

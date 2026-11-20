@@ -44,8 +44,10 @@ export function encodeTiePrologue(openNotes, lookup) {
 }
 
 export function decodeChunkTokens(tokenIds, lookup, { chunkStartSec = 0.0, openNotes = [], boundaryMode = "legacy" } = {}) {
-  if (boundaryMode === "pitch-tie") return decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes);
-  if (boundaryMode !== "legacy" && boundaryMode !== "prelude-forcing") throw new RangeError("Unsupported boundaryMode");
+  if (boundaryMode === "pitch-tie" || boundaryMode === "prelude-forcing") {
+    return decodeExplicitChunk(tokenIds, lookup, chunkStartSec, openNotes, boundaryMode === "pitch-tie");
+  }
+  if (boundaryMode !== "legacy") throw new RangeError("Unsupported boundaryMode");
   const completed = [];
   const active = new Map();
   for (const note of openNotes) {
@@ -116,24 +118,30 @@ export function decodeChunkTokens(tokenIds, lookup, { chunkStartSec = 0.0, openN
 
 // The model may name a held note with the wrong program. Preserve its actual
 // identity; the guessed program is an alias only until this chunk ends.
-function decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes) {
+function decodeExplicitChunk(tokenIds, lookup, chunkStartSec, openNotes, allowPitchAlias) {
   const completed = [];
   const keyOf = (program, pitch) => `${program}:${pitch}`;
   const active = new Map(openNotes.map(note => [keyOf(note.program, note.pitch), { ...note }]));
   const aliases = new Map();
   const reverseAliases = new Map();
   const declarations = new Map();
-  let curInst = 0;
-  let curVel = 1;
+  let curInst = null;
+  let curVel = null;
   let curTime = 0;
   const eos = tokenIds.indexOf(lookup.eosId);
   const end = eos < 0 ? tokenIds.length : eos;
   let body = 0;
-  let preludeInst = 0;
+  let preludeInst = null;
+  const tie = tokenIds.indexOf(lookup.eventToId.get("tie:0"));
+  // Only an uninterrupted leading program/pitch sequence is a prelude.
+  // A late delimiter discards its malformed prefix, not sounding notes.
   for (let i = 0; i < end; i++) {
     const event = lookup.idToEvent[tokenIds[i]];
     if (event?.kind === "inst") preludeInst = event.value;
-    else if (event?.kind === "pitch") declarations.set(keyOf(preludeInst, event.value), event.value);
+    else if (event?.kind === "pitch") {
+      if (preludeInst === null) break;
+      declarations.set(keyOf(preludeInst, event.value), event.value);
+    }
     else {
       if (event?.kind === "tie") {
         body = i + 1;
@@ -142,7 +150,10 @@ function decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes) {
       break;
     }
   }
-  if (body === 0) declarations.clear();
+  if (body === 0) {
+    declarations.clear();
+    if (tie >= 0 && tie < end) body = tie + 1;
+  }
 
   const matched = new Set();
   const remainingDecl = new Map();
@@ -154,7 +165,7 @@ function decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes) {
   // Reserve ALL exact matches before considering any pitch-only aliases.
   for (const [key, pitch] of declarations) {
     if (active.has(key)) matched.add(key);
-    else add(remainingDecl, pitch, key);
+    else if (allowPitchAlias) add(remainingDecl, pitch, key);
   }
   for (const [key, note] of active) {
     if (!matched.has(key)) add(remainingNotes, note.pitch, key);
@@ -193,7 +204,7 @@ function decodePitchTieChunk(tokenIds, lookup, chunkStartSec, openNotes) {
     else if (ev.kind === "drum") {
       const t = chunkStartSec + curTime;
       completed.push({ isDrum: true, program: DRUM_PROGRAM, pitch: ev.value, onset: t, offset: t + 0.05 });
-    } else if (ev.kind === "pitch") {
+    } else if (ev.kind === "pitch" && curInst !== null && curVel !== null) {
       const t = chunkStartSec + curTime;
       const key = keyOf(curInst, ev.value);
       const heldKey = active.has(key) ? key : aliases.get(key);
