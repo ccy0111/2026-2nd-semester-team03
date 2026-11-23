@@ -7,6 +7,27 @@ import {
   finalizeOpenNotes,
 } from "./midi-decoder.mjs";
 
+// Only this explicit model-generation failure is eligible for chunk recovery.
+export class TokenLimitError extends Error {
+  constructor() {
+    super("Model did not emit EOS within the per-chunk token limit");
+    this.name = "TokenLimitError";
+    this.code = "TOKEN_LIMIT_EXHAUSTED";
+  }
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
+  const error = new Error("Transcription aborted");
+  error.name = "AbortError";
+  throw error;
+}
+
+function validateTokenLimit(maxGenLen) {
+  if (!Number.isInteger(maxGenLen) || maxGenLen < 1) throw new RangeError("maxGenLen must be a positive integer");
+}
+
 function argmaxMasked(logitsRow, maskedSet) {
   let bestId = -1;
   let bestScore = -Infinity;
@@ -141,8 +162,10 @@ export class WebScoreClient {
     return new this.ort.Tensor("float32", data, [1, ids.length, dim]);
   }
 
-  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024 } = {}) {
+  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024, signal = null } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
+    validateTokenLimit(maxGenLen);
+    throwIfAborted(signal);
     const { data: melData, dims: melDims } = this.mel.computeChunkLogMel(pcm5s);
     const melTensor = new this.ort.Tensor("float32", melData, melDims);
     const encOut = await this.encoderSession.run({ mel: melTensor });
@@ -176,6 +199,7 @@ export class WebScoreClient {
 
     try {
       for (let step = 0; step < maxGenLen; step++) {
+        throwIfAborted(signal);
         const seqLen = stepEmbeds.dims[1];
         const pastLen = pastK.dims[3];
         const maskTensor = new this.ort.Tensor("float32", buildCausalMask(seqLen, pastLen), [1, 1, seqLen, pastLen + seqLen]);
@@ -195,6 +219,7 @@ export class WebScoreClient {
         pastK = decOut.present_k;
         pastV = decOut.present_v;
         posOffset += seqLen;
+        throwIfAborted(signal);
 
         const vocabSize = this.lookup.idToEvent.length;
         const logitsArr = decOut.logits.data;
@@ -206,10 +231,10 @@ export class WebScoreClient {
 
         if (nextTok === this.lookup.eosId) return generated;
 
-        stepEmbeds = await this.embedTokenIds([nextTok]);
+        if (step + 1 < maxGenLen) stepEmbeds = await this.embedTokenIds([nextTok]);
       }
 
-      throw new Error("Model did not emit EOS within the per-chunk token limit");
+      throw new TokenLimitError();
     } finally {
       if (this.gpuKvCache) {
         for (const tensor of [pastK, pastV]) if (tensor.location === "gpu-buffer") tensor.dispose();
@@ -217,26 +242,58 @@ export class WebScoreClient {
     }
   }
 
-  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null } = {}) {
+  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "pitch-tie" } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     if (this.transcribing) throw new Error("A transcription is already running");
+    validateTokenLimit(maxGenLen);
+    if (!["legacy", "prelude-forcing", "pitch-tie"].includes(boundaryMode)) throw new RangeError("Unsupported boundaryMode");
+    throwIfAborted(signal);
     this.transcribing = true;
     try {
       const chunks = splitPcmInto5sChunks(pcm16k);
       const allNotes = [];
       const tokensByChunk = [];
+      const chunkStatuses = [];
       let openNotes = [];
 
       for (let idx = 0; idx < chunks.length; idx++) {
+        throwIfAborted(signal);
         const { pcm, startSec } = chunks[idx];
-        const promptTokens = idx > 0 ? encodeTiePrologue(openNotes, this.lookup) : [];
-        const tokens = await this.transcribeChunk(pcm, { promptTokens, maxGenLen });
+        const forcePrelude = boundaryMode === "prelude-forcing" || (boundaryMode === "legacy" && idx > 0);
+        const promptTokens = forcePrelude ? encodeTiePrologue(openNotes, this.lookup) : [];
+        const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, pcm16k.length / 16000), status: "ok", attempts: 1, boundaryReset: false };
+        let tokens;
+        try {
+          tokens = await this.transcribeChunk(pcm, { promptTokens, maxGenLen, signal });
+        } catch (error) {
+          throwIfAborted(signal);
+          if (!(error instanceof TokenLimitError)) throw error;
+          // Never decode partial runaway tokens. A retry starts new KV inside
+          // transcribeChunk, while reusing only the loaded inference sessions.
+          allNotes.push(...finalizeOpenNotes(openNotes, startSec));
+          openNotes = [];
+          chunkStatus.boundaryReset = true;
+          chunkStatus.reason = "token_limit";
+          chunkStatus.attempts = 2;
+          try {
+            tokens = await this.transcribeChunk(pcm, { promptTokens: encodeTiePrologue([], this.lookup), maxGenLen, signal });
+            chunkStatus.status = "recovered";
+          } catch (retryError) {
+            throwIfAborted(signal);
+            if (!(retryError instanceof TokenLimitError)) throw retryError;
+            chunkStatus.status = "failed";
+            tokens = [];
+          }
+        }
+        throwIfAborted(signal);
         tokensByChunk.push(tokens);
-
-        const decoded = decodeChunkTokens(tokens, this.lookup, { chunkStartSec: startSec, openNotes });
-        allNotes.push(...decoded.completed);
-        openNotes = decoded.nextOpenNotes;
-        if (onProgress) onProgress({ completedChunks: idx + 1, totalChunks: chunks.length });
+        if (chunkStatus.status !== "failed") {
+          const decoded = decodeChunkTokens(tokens, this.lookup, { chunkStartSec: startSec, openNotes, boundaryMode });
+          allNotes.push(...decoded.completed);
+          openNotes = decoded.nextOpenNotes;
+        }
+        chunkStatuses.push(chunkStatus);
+        if (onProgress) onProgress({ completedChunks: idx + 1, totalChunks: chunks.length, chunkStatus: { ...chunkStatus } });
       }
 
       const endSec = pcm16k.length / 16000;
@@ -245,7 +302,7 @@ export class WebScoreClient {
       const notes = allNotes.filter(n => n.onset >= 0 && n.onset < endSec)
         .map(n => ({ ...n, offset: Math.min(n.offset, endSec) }));
       const midiBytes = encodeNotesToMidi(notes);
-      return { notes, midiBytes, tokensByChunk };
+      return { notes, midiBytes, tokensByChunk, chunkStatuses };
     } finally { this.transcribing = false; }
   }
 
@@ -259,7 +316,9 @@ export class WebScoreClient {
   }
 
   async transcribeAudio(audioInput, opts = {}) {
+    throwIfAborted(opts?.signal);
     const pcm16k = await decodeAudioTo16kMono(audioInput);
+    throwIfAborted(opts?.signal);
     return this.transcribePcm(pcm16k, opts);
   }
 }
