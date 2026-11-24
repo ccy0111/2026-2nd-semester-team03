@@ -1,0 +1,20 @@
+[
+  {
+    "filename": "MuseScore_General.sf2",
+    "source_url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf2",
+    "bytes": 215614036,
+    "sha256": "ee51d2c4b1525e70f19a45909c4fd7a2e26d91d115fa89dbf5a6bc413d8b9bf3"
+  },
+  {
+    "filename": "MuseScore_General_License.md",
+    "source_url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General_License.md",
+    "bytes": 3419,
+    "sha256": "5ad8d737e13c7f01f5b9674872a82a92b4ba253603e8ed14b9db12293550b4b9"
+  },
+  {
+    "filename": "MuseScore_General_Sample_Sources.csv",
+    "source_url": "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General_Sample_Sources.csv",
+    "bytes": 12817,
+    "sha256": "cbec757614fa47d2ba71a2f1276bf010918261d94987cfb678352e9755e9bdd4"
+  }
+]

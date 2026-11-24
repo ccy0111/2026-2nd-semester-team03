@@ -40,6 +40,49 @@ test('uses the configured CDN current manifest when no URL is supplied', async (
     await client.dispose();
   }
 });
+test('the default native-style fetch uses the global receiver for startup and refresh', async () => {
+  const { state, options } = harness();
+  delete options.fetchImpl;
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async function (url, init) {
+    assert.equal(this, globalThis);
+    calls.push({ url, init });
+    return { ok: true, json: async () => state.current };
+  };
+  let client;
+  try {
+    client = await VersionedWebScoreClient.create({}, options);
+    state.current = manifest('v2');
+    await client.checkForUpdate();
+    assert.equal(client.modelVersion, 'v2');
+    assert.deepEqual(calls.map(({ url }) => url), [options.manifestUrl, options.manifestUrl]);
+    for (const { init } of calls) {
+      assert.equal(init.cache, 'no-store');
+      assert.equal(init.credentials, 'same-origin');
+      assert.ok(init.signal instanceof AbortSignal);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    await client?.dispose();
+  }
+});
+
+test('an explicit injected fetch is used even when the global fetch is unavailable', async () => {
+  const { state, options } = harness();
+  const originalFetch = globalThis.fetch;
+  let client;
+  globalThis.fetch = undefined;
+  try {
+    client = await VersionedWebScoreClient.create({}, options);
+    assert.equal(client.modelVersion, 'v1');
+    assert.equal(state.calls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await client?.dispose();
+  }
+});
+
 test('supports an explicit backend manifest URL instead of the CDN default', async () => {
   const { options } = harness({ manifestUrl: 'http://127.0.0.1:8000/api/model-manifest' });
   const client = await VersionedWebScoreClient.create({}, options);
