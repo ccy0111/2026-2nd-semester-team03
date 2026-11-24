@@ -15,3 +15,6 @@ __pycache__/
 *.py[cod]
 .venv/
 node_modules/
+
+# Generated browser SoundFont playback assets
+/frontend/vendor/soundfont/
