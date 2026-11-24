@@ -19,15 +19,20 @@ python -m http.server 8080
 
 위 명령은 독립 데모를 위한 빌드입니다. `http://localhost:8080/demo.html`에서 테스트 음표로 재생합니다.
 
-과제 프론트의 FastAPI `/static` 경로에서는 배포 빌드 단계에 다음을 실행합니다. 생성물은 Git에 올리지 않습니다.
+과제 프론트에서는 **Node.js나 npm 없이** 저장소 루트에서 기존 FastAPI 서버만 실행합니다.
+
+```sh
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+브라우저용 JS 두 개, CDN 매니페스트, 재배포 라이선스는 `frontend/vendor/soundfont/`에 포함되어 있습니다. 기본 서버는 이 파일들을 `/static/vendor/soundfont/`에서 제공합니다. 별도 `FRONTEND_DIR` (예: Vite 빌드 결과)를 배포할 때는 그 디렉터리의 `vendor/soundfont/`에도 같은 파일을 복사하세요. SF2 샘플은 저장소에 포함되지 않으며 브라우저가 재생에 필요한 뱅크만 CDN에서 받습니다.
+
+Node.js와 npm은 위 독립 데모를 빌드하거나, 아래처럼 소스·의존성·매니페스트를 바꾼 뒤 배포 파일을 **다시 생성할 때만** 필요합니다. 잠금 파일로 설치하고, 변경된 배포 파일도 함께 커밋하세요.
 
 ```sh
 npm --prefix soundfont-playback ci
 npm --prefix soundfont-playback run build:frontend
 ```
-
-생성 위치는 `frontend/vendor/soundfont/`이며 **이미 제공되는** `/static/vendor/soundfont/`에서 읽습니다.
-별도 `FRONTEND_DIR`를 배포하는 경우 이 디렉터리를 사용하는 정적 파일 트리에도 복사하세요.
 
 ```js
 import {createGroupedPlayer} from '/static/vendor/soundfont/dist/grouped-player.mjs';
