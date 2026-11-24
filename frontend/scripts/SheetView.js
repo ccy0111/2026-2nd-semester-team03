@@ -1,14 +1,15 @@
 // ==========================================================
 // SheetView
 // - "악보" 탭 화면을 담당하는 class
-//   악기 선택 → 그 악기 음표만 골라 → 오선보(abcjs) 또는 타브(TabRenderer)로 그림
-// - 템포(BPM)·박자 입력, 기타 표시 방식(오선보/타브/오선보+타브) 선택
-// - 오선보는 abcjs의 재생 기능으로 악보를 소리로 듣고, 재생 중인 음표를 표시
+//   악기 선택 → 그 악기 음표만 골라 → 오선보(abcjs)로 그림
+// - 템포(BPM)·박자 입력, 기타 표시 방식(오선보 / 오선보+타브) 선택
+//   (타브만 따로 그리던 방식은 한 줄로 길게 이어지다 잘려서 뺌 → 타브는 abcjs가 오선보 아래에 줄바꿈해 그림)
+// - abcjs의 재생 기능으로 악보를 소리로 듣고, 재생 중인 음표를 표시
+// - 음표를 클릭하면 그 위치부터 재생
 //
 // abcjs: 오선 악보 라이브러리 (MIT). index.html에서 <script>로 불러와 window.ABCJS로 사용
 // ==========================================================
 import { AbcBuilder, SHEET_KEYS } from "./AbcBuilder.js";
-import { TabRenderer } from "./TabRenderer.js";
 import { ScoreRenderer } from "./ScoreRenderer.js";
 import { getInstrument, instrumentOrder } from "./instruments.js";
 
@@ -36,26 +37,31 @@ export class SheetView {
 		this.sheetArea = elements.sheetArea;   // 악보가 그려질 자리
 		this.messageText = elements.messageText;
 
-		this.tabRenderer = new TabRenderer(this.sheetArea);
 		this.notes = [];
+		this.songTitle = "";
 		this.startSec = 0;
 		this.isVisible = false;
 		this.needsRender = false;
 		this.synthControl = null;
-		this.mode = null; // 지금 그려진 방식: "abc" | "tab"
+		this.visualObj = null;   // 지금 그려진 abcjs 악보
+		this.lastMoment = 0;     // 악보 마지막 음의 시각(ms) — 클릭 위치를 재생 비율로 바꿀 때 사용
+		this.noteTimes = new Map(); // 악보 SVG 요소 → 그 음이 나오는 시각(ms)
 		this.bpm = DEFAULT_BPM;  // 마지막으로 쓴 올바른 템포
 		this.soundFailed = false; // 악보 소리 파일 받기에 실패했는지
-		this.originalTime = 0;   // 원본 MP3의 마지막 재생 위치 (타브를 다시 그려도 커서 유지)
 
 		// 설정을 바꾸면 다시 그림
 		[this.instrumentSelect, this.guitarModeSelect, this.meterSelect].forEach((el) => {
 			el.addEventListener("change", () => this.render());
 		});
 		this.bpmInput.addEventListener("change", () => this.render());
+		// 음표 클릭 → 그 위치부터 재생
+		this.sheetArea.addEventListener("click", (event) => this.handleSheetClick(event));
 	}
 
 	// 채보 결과 받기 (instruments: InstrumentLegend와 같은 목록)
-	setResult(notes, instruments) {
+	// songTitle: 악보 맨 위 큰 제목 (MP3 파일 이름)
+	setResult(notes, instruments, songTitle = "") {
+		this.songTitle = songTitle;
 		// 피아노롤(ScoreRenderer)과 같은 규칙으로 이상한 음표를 거름 (악기 목록 개수와 맞도록)
 		this.notes = notes.filter((note) => ScoreRenderer.isValidNote(note));
 		// 곡 첫 음 시각 (음표가 아주 많아도 되도록 Math.min(...배열) 대신 반복문)
@@ -98,18 +104,10 @@ export class SheetView {
 		this.notes = [];
 		this.instrumentSelect.innerHTML = "";
 		this.sheetArea.innerHTML = "";
-		this.tabRenderer.clear();
 		this.setMessage("");
-		this.mode = null;
+		this.visualObj = null;
+		this.noteTimes = new Map();
 		this.needsRender = false;
-		this.originalTime = 0;
-	}
-
-	// 원본 MP3 재생 위치 (타브 보기에서만 사용: 타브는 시간 기준이라 원본과 맞출 수 있음)
-	// follow: 재생 위치를 따라 가로 스크롤할지 (AudioPlayer가 정해 줌)
-	setOriginalTime(seconds, follow = true) {
-		this.originalTime = seconds;
-		if (this.mode === "tab") this.tabRenderer.setCursor(seconds, follow);
 	}
 
 	// ---------- 그리기 ----------
@@ -129,20 +127,10 @@ export class SheetView {
 		const notes = this.notes.filter((note) => getInstrument(note).key === key);
 		const guitarMode = isGuitar ? this.guitarModeSelect.value : "staff";
 
-		// 기타 타브만 보기: 직접 그리는 시간 기준 타브
-		if (guitarMode === "tab") {
-			this.mode = "tab";
-			this.audioArea.classList.add("is-hidden");
-			this.tabRenderer.render(notes);
-			this.tabRenderer.setCursor(this.originalTime, false); // 다시 그려도 재생 위치 유지
-			this.setMessage("타브는 시간 기준으로 그려요(리듬 표시 없음). 위쪽 원본 재생기로 들으면 재생 위치가 표시돼요.");
-			return;
-		}
-
 		// 오선보 (abcjs)
+		this.visualObj = null;
 		const ABCJS = window.ABCJS;
 		if (!ABCJS) {
-			this.mode = null;
 			this.sheetArea.innerHTML = "";
 			this.setMessage("악보 라이브러리(abcjs)를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.");
 			return;
@@ -156,6 +144,7 @@ export class SheetView {
 				notes,
 				instrumentKey: key,
 				instrumentName: name,
+				songTitle: this.songTitle,
 				bpm,
 				beatsPerBar: Number(this.meterSelect.value),
 				startSec: this.startSec,
@@ -174,19 +163,80 @@ export class SheetView {
 		} catch (error) {
 			// 예상하지 못한 음표 때문에 그리기에 실패해도 화면 전체가 멈추지 않게
 			console.warn(error);
-			this.mode = null;
 			this.sheetArea.innerHTML = "";
 			this.audioArea.classList.add("is-hidden");
 			this.setMessage("악보를 그리지 못했어요.");
 			return;
 		}
-		this.mode = "abc";
+		this.visualObj = visualObj;
+		this.lastMoment = this.computeTiming(visualObj);
 		if (visualObj?.warnings?.length) console.warn("abcjs warnings", visualObj.warnings);
 
 		let message = `템포 ${bpm} BPM 기준으로 16분음표 단위로 정리한 악보예요. 템포가 맞지 않으면 직접 고쳐 보세요.`;
 		if (key !== SHEET_KEYS.DRUM_KEY) message += " 같은 손에서 겹치는 음은 다음 음이 시작될 때 끊어서 표시해요.";
 		this.setMessage(message);
 		this.setupSynth(ABCJS, visualObj);
+	}
+
+	// abcjs에게 음마다 시각을 계산하게 해서 "SVG 요소 → 시각(ms)" 표를 만들고, 마지막 음의 시각을 돌려줌
+	// timing.elements: 그 시각에 나오는 음표들의 SVG 요소 묶음 (add_classes: true일 때)
+	computeTiming(visualObj) {
+		this.noteTimes = new Map();
+		try {
+			const timings = visualObj?.setTiming?.() ?? [];
+			let last = 0;
+			timings.forEach((timing) => {
+				if (!Number.isFinite(timing.milliseconds)) return;
+				last = Math.max(last, timing.milliseconds);
+				(timing.elements ?? []).forEach((group) => {
+					(group ?? []).forEach((el) => {
+						if (!this.noteTimes.has(el)) this.noteTimes.set(el, timing.milliseconds); // 붙임줄로 이어진 음은 처음 시각
+					});
+				});
+			});
+			return last;
+		} catch (error) {
+			console.warn(error);
+			return 0;
+		}
+	}
+
+	// 클릭한 곳에서 가장 가까운 음표를 찾아 그 시각부터 재생
+	// (abcjs 자체 클릭 기능은 큰보표 아래 줄 음표를 놓치는 경우가 있어 직접 거리로 찾음)
+	handleSheetClick(event) {
+		const MAX_DISTANCE = 30; // 음표에서 이 거리(px) 안쪽을 눌렀을 때만
+		let best = null;
+		let bestDistance = MAX_DISTANCE * MAX_DISTANCE;
+		this.noteTimes.forEach((ms, el) => {
+			const rect = el.getBoundingClientRect();
+			if (rect.width === 0 && rect.height === 0) return;
+			const dx = Math.max(rect.left - event.clientX, 0, event.clientX - rect.right);
+			const dy = Math.max(rect.top - event.clientY, 0, event.clientY - rect.bottom);
+			const distance = dx * dx + dy * dy;
+			if (distance <= bestDistance) {
+				bestDistance = distance;
+				best = ms;
+			}
+		});
+		if (best !== null) this.playFrom(best);
+	}
+
+	// ms: 악보 시작부터의 시각
+	// abcjs 재생기의 seek(비율)를 씀: 비율로 넘기면 재생 속도(%)를 바꿔도 같은 자리로 감
+	async playFrom(ms) {
+		const synth = this.synthControl;
+		if (!synth || !Number.isFinite(ms) || this.lastMoment <= 0 || this.soundFailed) return;
+		const ratio = Math.min(Math.max(ms / this.lastMoment, 0), 1);
+		try {
+			// abcjs의 play()는 재생 ↔ 일시정지 전환이라, 멈춰 있을 때만 누름
+			if (!synth.isStarted) {
+				const result = await synth.play();
+				if (result?.status === "error" || !synth.isStarted) return; // 소리 준비 실패
+			}
+			synth.seek(ratio);
+		} catch (error) {
+			console.warn(error);
+		}
 	}
 
 	// 템포 입력 읽기: 40~240으로 맞추고, 비었거나 숫자가 아니면 마지막 값 유지 (40으로 바뀌지 않게)
