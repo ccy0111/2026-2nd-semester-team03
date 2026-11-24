@@ -1,3 +1,5 @@
+import { GpuTokenSelector } from "./gpu-token-selector.mjs";
+import { boundedGpuBatchWidth, runBatchPair } from "./gpu-batch-pair.mjs";
 import { WebMelProcessor, decodeAudioTo16kMono, splitPcmInto5sChunks } from "./mel-frontend.mjs";
 import {
   buildTokenLookup,
@@ -63,6 +65,8 @@ function buildCausalMask(seqLen, pastLen) {
   return mask;
 }
 
+const chunkAcoustics = Symbol("chunk acoustics");
+
 export class WebScoreClient {
   constructor(ort, { tokenizer, encoderSession, embedSession, decoderSession, arch, gpuKvCache = false, cacheEmbeddings = false }) {
     this.ort = ort;
@@ -80,11 +84,13 @@ export class WebScoreClient {
     this.maskedIds = new Set([this.lookup.padId, this.lookup.bosId, this.lookup.unkId]);
   }
 
-  static async create(ort, { baseUrl = "/models", useInt8 = true, modelUrls = null, executionProviders = ["webgpu", "wasm"], gpuKvCache = false, cacheEmbeddings = false } = {}) {
+  static async create(ort, { baseUrl = "/models", useInt8 = true, modelUrls = null, executionProviders = ["webgpu", "wasm"], gpuKvCache = false, cacheEmbeddings = false, gpuTokenSelection = false, gpuBatchPairs = false, gpuBatchWidth = 2, gpuFeedbackBlock = 0 } = {}) {
     if (!Array.isArray(executionProviders) || !executionProviders.length) throw new Error("Specify at least one execution provider");
     if (gpuKvCache && (executionProviders[0] !== "webgpu" || useInt8)) {
       throw new Error("GPU KV cache is experimental: select WebGPU first and an FP32 decoder");
     }
+    if (gpuTokenSelection && !gpuKvCache) throw new Error("GPU token selection requires GPU KV cache");
+    if (gpuFeedbackBlock !== 0 && gpuFeedbackBlock !== 4) throw new Error("Unsupported block feedback size");
     const decFile = useInt8 ? "decoder_kv.int8.onnx" : "decoder_kv.onnx";
     const names = ["tokenizer.json", "config.json", "mel_encoder.onnx", "token_embed.onnx", decFile];
     // Private buckets supply independently signed URLs. Never append paths to
@@ -128,16 +134,27 @@ export class WebScoreClient {
     const loadSession = async (name) => {
       try {
         const sessionOpts = gpuKvCache && name === decFile
-          ? { ...opts, preferredOutputLocation: { logits: "cpu", present_k: "gpu-buffer", present_v: "gpu-buffer" } }
+          ? { ...opts, preferredOutputLocation: { logits: gpuTokenSelection ? "gpu-buffer" : "cpu", present_k: "gpu-buffer", present_v: "gpu-buffer" } }
           : opts;
         return await ort.InferenceSession.create(urls[name], sessionOpts);
       } catch {
         throw new Error(`Failed to load ${name}: check access, URL expiry and model compatibility`);
       }
     };
-    const settled = await Promise.allSettled([
-      loadSession("mel_encoder.onnx"), loadSession("token_embed.onnx"), loadSession(decFile),
-    ]);
+    const sessionNames = ["mel_encoder.onnx", "token_embed.onnx", decFile];
+    const settled = [];
+    if (executionProviders[0] === "webgpu") {
+      // Native WebGPU EP rejects concurrent session creation, even for different graphs.
+      for (const name of sessionNames) {
+        try {
+          settled.push({ status: "fulfilled", value: await loadSession(name) });
+        } catch (reason) {
+          settled.push({ status: "rejected", reason });
+        }
+      }
+    } else {
+      settled.push(...await Promise.allSettled(sessionNames.map(loadSession)));
+    }
     const failed = settled.find(r => r.status === "rejected");
     if (failed) {
       await Promise.allSettled(settled.filter(r => r.status === "fulfilled").map(r => r.value?.release?.()));
@@ -146,7 +163,24 @@ export class WebScoreClient {
     const [encoderSession, embedSession, decoderSession] = settled.map(r => r.value);
 
     try {
-      return new WebScoreClient(ort, { tokenizer, encoderSession, embedSession, decoderSession, arch, gpuKvCache, cacheEmbeddings });
+      const client = new WebScoreClient(ort, { tokenizer, encoderSession, embedSession, decoderSession, arch, gpuKvCache, cacheEmbeddings });
+      if (gpuTokenSelection) {
+        const device = await ort.env.webgpu.device;
+        client.tokenSelector = await GpuTokenSelector.create(device, client.lookup.idToEvent.length);
+        client.gpuKvBindingBytes = Math.min(device?.limits?.maxBufferSize ?? 0, device?.limits?.maxStorageBufferBindingSize ?? 0);
+      }
+      // Only supported by the existing dynamic-batch WebScore graph and native FP32 logits ABI.
+      const hasBatch = (session, name, axis) => session.inputMetadata?.some(input =>
+        input.name === name && (input.shape?.[axis] === "batch" || input.shape?.[axis] === 2));
+      client.gpuBatchWidth = gpuBatchWidth === 4 ? 4 : 2;
+      const packedRelease = "https://models.midistudio.app/web-student-kd/releases/v2-step-00046500-grpo100-fp16-v1";
+      const batchArtifact = !useInt8 && names.every(name =>
+        urls[name] === `${packedRelease}/${name === "config.json" ? "config.web-abi-v1.json" : name}`);
+      client.gpuBatchPairs = Boolean(gpuBatchPairs && batchArtifact && client.tokenSelector &&
+        hasBatch(encoderSession, "mel", 0) && hasBatch(decoderSession, "inputs_embeds", 0) &&
+        hasBatch(decoderSession, "past_k", 1) && hasBatch(decoderSession, "past_v", 1));
+      client.gpuFeedbackBlock = client.gpuBatchPairs && gpuFeedbackBlock === 4 ? 4 : 0;
+      return client;
     } catch {
       await Promise.allSettled([encoderSession, embedSession, decoderSession].map(s => s?.release?.()));
       throw new Error("Invalid model metadata or interface");
@@ -171,7 +205,9 @@ export class WebScoreClient {
     return new this.ort.Tensor("float32", data, [1, ids.length, dim]);
   }
 
-  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024, signal = null, allowedPrograms } = {}) {
+  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024, signal = null, allowedPrograms,
+    [chunkAcoustics]: acoustics = {},
+  } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     validateTokenLimit(maxGenLen);
     throwIfAborted(signal);
@@ -188,10 +224,21 @@ export class WebScoreClient {
         throw new RangeError("promptTokens contain tokens not permitted by allowedPrograms");
       }
     }
-    const { data: melData, dims: melDims } = this.mel.computeChunkLogMel(pcm5s);
-    const melTensor = new this.ort.Tensor("float32", melData, melDims);
-    const encOut = await this.encoderSession.run({ mel: melTensor });
-    const condEmbeds = encOut.cond_embeds;
+    // The acoustic prefix does not depend on the prompt. Keep only this chunk's
+    // encoder result so an EOS retry starts fresh decoder KV without recomputing audio.
+    if (acoustics.condEmbeds === undefined) {
+      const { data: melData, dims: melDims } = this.mel.computeChunkLogMel(pcm5s);
+      const melTensor = new this.ort.Tensor("float32", melData, melDims);
+      const encOut = await this.encoderSession.run({ mel: melTensor });
+      acoustics.condEmbeds = encOut.cond_embeds;
+    }
+    throwIfAborted(signal);
+    const { condEmbeds } = acoustics;
+    let selector = this.tokenSelectorDisabled ? null : this.tokenSelector;
+    const downgradeSelector = () => { this.tokenSelectorDisabled = true; selector = null; };
+    if (selector) {
+      try { selector.setMask(maskedIds); } catch { downgradeSelector(); }
+    }
 
     const seqIds = [this.lookup.bosId, ...promptTokens];
     const tokEmbeds = await this.embedTokenIds(seqIds);
@@ -217,6 +264,9 @@ export class WebScoreClient {
 
     let stepEmbeds = new this.ort.Tensor("float32", prefillData, [1, prefillLen, hiddenDim]);
     let posOffset = 0;
+    // Session.run is awaited before the next write; no concurrent use of this host input.
+    const posData = new BigInt64Array(1);
+    const posTensor = new this.ort.Tensor("int64", posData, [1]);
     const generated = [...promptTokens];
     // Single-token causal rows are all zero. Reuse bounded storage for their
     // views instead of allocating and clearing an O(past length) buffer per token.
@@ -231,7 +281,7 @@ export class WebScoreClient {
         const maskData = step > 0 && seqLen === 1 && total <= decodeMask.length
           ? decodeMask.subarray(0, total) : buildCausalMask(seqLen, pastLen);
         const maskTensor = new this.ort.Tensor("float32", maskData, [1, 1, seqLen, total]);
-        const posTensor = new this.ort.Tensor("int64", BigInt64Array.from([BigInt(posOffset)]), [1]);
+        posData[0] = BigInt(posOffset);
 
         const decOut = await this.decoderSession.run({
           inputs_embeds: stepEmbeds,
@@ -247,14 +297,27 @@ export class WebScoreClient {
         pastK = decOut.present_k;
         pastV = decOut.present_v;
         posOffset += seqLen;
-        throwIfAborted(signal);
-
-        const vocabSize = this.lookup.idToEvent.length;
-        const logitsArr = decOut.logits.data;
-        const logitRows = decOut.logits.dims[1];
-        if (logitRows !== 1 && logitRows !== seqLen) throw new Error("Invalid decoder logits shape");
-        const lastRow = logitsArr.subarray((logitRows - 1) * vocabSize, logitRows * vocabSize);
-        const nextTok = argmaxMasked(lastRow, maskedIds);
+        const logits = decOut.logits;
+        let nextTok;
+        try {
+          throwIfAborted(signal);
+          const vocabSize = this.lookup.idToEvent.length;
+          const logitRows = logits.dims[1];
+          if (logitRows !== 1 && logitRows !== seqLen) throw new Error("Invalid decoder logits shape");
+          const start = (logitRows - 1) * vocabSize;
+          if (selector && logits.location === "gpu-buffer" && logits.type === "float32") {
+            try {
+              nextTok = await selector.run(logits.gpuBuffer, start, logitRows * vocabSize * 4);
+            } catch { downgradeSelector(); }
+          }
+          if (nextTok === undefined) {
+            const values = logits.location === "gpu-buffer" ? await logits.getData(true) : logits.data;
+            nextTok = argmaxMasked(values.subarray(start, start + vocabSize), maskedIds);
+          }
+          throwIfAborted(signal);
+        } finally {
+          if (logits.location === "gpu-buffer") logits.dispose();
+        }
         if (programs !== undefined && nextTok < 0) throw new Error("No valid token available for allowedPrograms");
         generated.push(nextTok);
 
@@ -289,28 +352,61 @@ export class WebScoreClient {
       const tokensByChunk = [];
       const chunkStatuses = [];
       let openNotes = [];
+      let paired = null;
 
       for (let idx = 0; idx < chunks.length; idx++) {
         throwIfAborted(signal);
         const { pcm, startSec } = chunks[idx];
+        const acoustics = {};
+        // Native score stitching remains sequential. Only first passes that do not
+        // depend on a prior tie prompt are batched; EOS retry uses a fresh serial decoder.
+        if (!paired && this.gpuBatchPairs && !this.batchPairsDisabled && !this.tokenSelectorDisabled &&
+            boundaryMode === "pitch-tie" && maxGenLen >= 32 && idx + 1 < chunks.length) {
+          let width = boundedGpuBatchWidth(this.gpuBatchWidth ?? 2, chunks.length - idx, maxGenLen, this.gpuKvBindingBytes);
+          while (width >= 2) {
+            try {
+              const firstPass = await runBatchPair(this, chunks.slice(idx, idx + width).map(chunk => chunk.pcm),
+                { ...chunkOptions, selector: this.tokenSelector });
+              paired = { start: idx, ...firstPass };
+              break;
+            } catch {
+              throwIfAborted(signal);
+              if (width > 2) {
+                this.gpuBatchWidth = 2;
+                width = 2;
+                console.warn("[WebScore] Wide GPU decode unavailable; trying batch width 2");
+              } else {
+                this.batchPairsDisabled = true;
+                console.warn("[WebScore] Batched GPU decode unavailable; using sequential pitch-tie");
+                break;
+              }
+            }
+          }
+        }
+        const pairIndex = paired ? idx - paired.start : -1;
+        const pairedTokens = pairIndex >= 0 ? paired.tokens[pairIndex] : null;
+        const pairedEos = pairIndex >= 0 ? paired.eos[pairIndex] : null;
+        if (paired && pairIndex === paired.eos.length - 1) paired = null;
         const forcePrelude = boundaryMode === "prelude-forcing" || (boundaryMode === "legacy" && idx > 0);
         const promptTokens = forcePrelude ? encodeTiePrologue(openNotes, this.lookup) : [];
         const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, pcm16k.length / 16000), status: "ok", attempts: 1, boundaryReset: false };
         let tokens;
         try {
-          tokens = await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens });
+          if (pairedEos === false) throw new TokenLimitError();
+          tokens = pairedEos === true ? pairedTokens :
+            await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens, [chunkAcoustics]: acoustics });
         } catch (error) {
           throwIfAborted(signal);
           if (!(error instanceof TokenLimitError)) throw error;
           // Never decode partial runaway tokens. A retry starts new KV inside
-          // transcribeChunk, while reusing only the loaded inference sessions.
+          // transcribeChunk while reusing only the unchanged acoustic prefix.
           allNotes.push(...finalizeOpenNotes(openNotes, startSec));
           openNotes = [];
           chunkStatus.boundaryReset = true;
           chunkStatus.reason = "token_limit";
           chunkStatus.attempts = 2;
           try {
-            tokens = await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens: encodeTiePrologue([], this.lookup) });
+            tokens = await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens: encodeTiePrologue([], this.lookup), [chunkAcoustics]: acoustics });
             chunkStatus.status = "recovered";
           } catch (retryError) {
             throwIfAborted(signal);
@@ -347,6 +443,7 @@ export class WebScoreClient {
     if (this.transcribing) throw new Error("Cannot dispose during transcription");
     this.disposed = true;
     this.embeddingTable = null;
+    this.tokenSelector?.dispose();
     const results = await Promise.allSettled([this.encoderSession, this.embedSession, this.decoderSession].map(s => s?.release?.()));
     if (results.some(r => r.status === "rejected")) throw new Error("One or more model sessions could not be released");
   }
