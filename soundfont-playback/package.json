@@ -10,6 +10,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.mjs",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "build:frontend": "node build.mjs --frontend"
   }
 }

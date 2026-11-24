@@ -17,17 +17,35 @@ npm run build
 python -m http.server 8080
 ```
 
-`http://localhost:8080/demo.html`에서 테스트 음표로 재생한다. 서비스에는 `dist/grouped-player.mjs`, `dist/spessasynth_processor.min.js`와 이 manifest를 앱 자산으로 배포한다. Worklet은 앱과 같은 origin, 웹페이지는 HTTPS(개발 시 localhost), SF2는 CDN에서 읽는다.
+위 명령은 독립 데모를 위한 빌드입니다. `http://localhost:8080/demo.html`에서 테스트 음표로 재생합니다.
+
+과제 프론트의 FastAPI `/static` 경로에서는 배포 빌드 단계에 다음을 실행합니다. 생성물은 Git에 올리지 않습니다.
+
+```sh
+npm --prefix soundfont-playback ci
+npm --prefix soundfont-playback run build:frontend
+```
+
+생성 위치는 `frontend/vendor/soundfont/`이며 **이미 제공되는** `/static/vendor/soundfont/`에서 읽습니다.
+별도 `FRONTEND_DIR`를 배포하는 경우 이 디렉터리를 사용하는 정적 파일 트리에도 복사하세요.
 
 ```js
-import {createGroupedPlayer} from './dist/grouped-player.mjs';
-const {banks} = await (await fetch('./soundfonts.json')).json();
-// 재생 버튼에서 최초 호출하며, notes는 기존 모델 응답의 배열을 그대로 전달한다.
+import {createGroupedPlayer} from '/static/vendor/soundfont/dist/grouped-player.mjs';
+
+const base = '/static/vendor/soundfont/';
+const response = await fetch(base + 'soundfonts.json');
+if (!response.ok) throw new Error(`SoundFont manifest HTTP ${response.status}`);
+const {banks} = await response.json();
+
+// 재생 버튼의 클릭 핸들러에서 실행; notes는 기존 모델 응답 배열.
 const player = createGroupedPlayer({context: audioContext,
-  workletUrl: './dist/spessasynth_processor.min.js', banks});
+  workletUrl: base + 'dist/spessasynth_processor.min.js', banks});
 const {tracks, unsupportedPrograms} = await player.prepare(notes);
 await player.play();
 ```
+
+브라우저는 앱과 같은 origin에서 Worklet을 읽고, 샘플 SF2는 CDN에서 읽습니다.
+HTTPS로 배포하세요(로컬 개발은 localhost 허용). 기존 화면의 재생 컨트롤을 바꾸지 않습니다.
 
 원본 MP3 재생은 `<audio>` 쪽에 별도로 두고 MIDI 합성과 혼동하지 않는다. 일시정지 `pause()`, 시킹 `seek(seconds)`, 커서 `currentTime`, 음소거 `setMuted`(출력으로 GainNode 전달)가 제공된다. 다음 채보 결과를 열기 전에 `dispose()`한 뒤 새 플레이어를 만든다. 원본 MIDI 내보내기는 기존 코드를 그대로 사용한다.
 
