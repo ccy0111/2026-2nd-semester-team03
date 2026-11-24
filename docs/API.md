@@ -78,11 +78,13 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 | 인터페이스 | 입력 | 반환과 호출 규칙 |
 | --- | --- | --- |
-| `VersionedWebScoreClient.create(ort, options)` | `ort`는 ONNX Runtime Web 모듈. `options.manifestUrl`의 기본값은 `model-config.mjs`에 지정한 CDN `current.json`. `options.clientOptions.executionProviders`는 기본 MVP에서 `['wasm']`. | `Promise<VersionedWebScoreClient>`. 화면 준비 시 한 번 호출하고 파일 처리에 재사용한다. |
-| `model.transcribeAudio(file, options)` | 사용자가 선택한 MP3 `File`. `options.onProgress`는 선택적인 진행 콜백. | `Promise<{ notes, midiBytes, tokensByChunk }>`. 아래 음표 형식으로 렌더링한다. `midiBytes`와 `tokensByChunk`는 모델 패키지의 추가 반환값이다. |
-| `options.onProgress(progress)` | `{ completedChunks: number, totalChunks: number }` | 프론트엔드가 채보 진행 상태를 표시한다. |
+| `VersionedWebScoreClient.create(ort, options)` | `ort`는 ONNX Runtime Web 모듈. `options.manifestUrl`의 기본값은 `model-config.mjs`에 지정한 CDN `current.json`. `options.fetchImpl`는 매니페스트 조회를 위한 선택적 사용자 지정 함수다. 생략하면 브라우저의 기본 `fetch`를 사용하며, 워커에서 따로 감쌀 필요가 없다. `options.clientOptions.executionProviders`는 기본 MVP에서 `['wasm']`. | `Promise<VersionedWebScoreClient>`. 화면 준비 시 한 번 호출하고 파일 처리에 재사용한다. |
+| `model.transcribeAudio(file, options)` | 사용자가 선택한 MP3 `File`. `options.onProgress`는 선택적인 진행 콜백. | `Promise<{ notes, midiBytes, tokensByChunk, chunkStatuses }>`. 아래 음표 형식으로 렌더링한다. `midiBytes`와 `tokensByChunk`는 모델 패키지의 추가 반환값이고, `chunkStatuses`는 청크별 처리 결과다. |
+| `options.onProgress(progress)` | `{ completedChunks: number, totalChunks: number, chunkStatus?: ChunkStatus }` | 프론트엔드가 채보 진행 상태를 표시한다. `chunkStatus`가 있으면 이번에 처리한 청크의 결과를 함께 전달한다. |
 | `model.checkForUpdate()` | 없음 | 새 버전 확인 결과 `{ updated: boolean, version: string }`. 로딩된 버전이 있으면 업데이트 실패 시 해당 버전을 유지한다. |
 | `model.dispose()` | 없음 | 화면 종료 시 예약된 작업이 끝난 뒤 세션을 해제한다. |
+
+`ChunkStatus`는 `ok`, `recovered`, `failed`를 구분한다. `failed`는 채보하지 못한 구간이지, 음원에 소리가 없었다는 뜻이 아니다. 모든 청크를 처리했더라도 `chunkStatuses`에 `failed`가 있으면 전체 성공으로 표시하지 않는다. 필드와 재시도 규칙은 [청크 복구 문서](EOS_CHUNK_RECOVERY.md)를 참고한다.
 
 `notes`는 다음 객체의 배열이다. 프론트엔드가 이 값을 SVG 등으로 렌더링한다.
 
