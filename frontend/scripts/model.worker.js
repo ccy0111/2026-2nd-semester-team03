@@ -45,8 +45,6 @@ async function loadModel() {
 	const { VersionedWebScoreClient } = await import(MODEL_MODULE_URL);
 	model = await VersionedWebScoreClient.create(ort, {
 		clientOptions: { executionProviders: ["wasm"] },
-		// fetch를 그냥 넘기면 모델 코드 안에서 "Illegal invocation" 오류가 나므로 감싸서 전달
-		fetchImpl: (...args) => fetch(...args),
 	});
 }
 
