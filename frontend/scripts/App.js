@@ -8,6 +8,7 @@
 //   3. 추론 모듈 호출 → 음표를 SVG로 렌더링 (+ 실패/복구 구간 표시)
 //   4. 원본 MP3 Blob URL 다운로드, 다 쓴 URL과 모델 세션 해제
 //   5. 실패하면 파일 선택을 유지한 채 재시도
+// + 채보 결과 재생 (docs/MVP_REQUIREMENTS.md "채보 결과 재생 연동"): 재생·위치·음소거
 // ==========================================================
 import { ModelService } from "./ModelService.js";
 import { ScoreRenderer } from "./ScoreRenderer.js";
@@ -16,6 +17,7 @@ import { AudioPlayer } from "./AudioPlayer.js";
 import { toUserMessage } from "./errorMessages.js";
 import { InstrumentLegend } from "./InstrumentLegend.js";
 import { SheetView } from "./SheetView.js";
+import { NotePlayer } from "./NotePlayer.js";
 
 export class App {
 	constructor() {
@@ -32,6 +34,11 @@ export class App {
 		this.viewTabs = document.querySelector("#view-tabs");
 		this.rollArea = document.querySelector("#roll-area");
 		this.sheetPanel = document.querySelector("#sheet-panel");
+		this.notePlayerArea = document.querySelector("#note-player");
+		this.notePlayButton = document.querySelector("#note-play");
+		this.noteMuteButton = document.querySelector("#note-mute");
+		this.noteTimeText = document.querySelector("#note-time");
+		this.noteMessage = document.querySelector("#note-message");
 
 		// 기능 담당 객체
 		this.modelService = new ModelService();
@@ -40,6 +47,7 @@ export class App {
 		this.instrumentLegend = new InstrumentLegend(
 			document.querySelector("#instrument-legend"),
 			(key, visible) => this.renderer.setInstrumentVisible(key, visible),
+			(key, muted) => this.notePlayer.setInstrumentMuted(key, muted),
 		);
 		this.sheetView = new SheetView({
 			instrumentSelect: document.querySelector("#sheet-instrument"),
@@ -55,13 +63,29 @@ export class App {
 			audio: document.querySelector("#audio-player"),
 			downloadLink: document.querySelector("#download-link"),
 			onTimeUpdate: (seconds, follow) => {
-				this.renderer.setCursor(seconds, follow);
-				this.sheetView.setOriginalTime(seconds, follow); // 타브 보기의 재생 위치
+				// 악기 소리 재생 중에는 커서를 그쪽이 움직임
+				if (this.lastSource === "original") this.renderer.setCursor(seconds, follow);
+			},
+		});
+		// 채보 결과를 악기 소리로 재생 (팀 재생 모듈)
+		this.notePlayer = new NotePlayer({
+			onTimeUpdate: (seconds, follow) => {
+				if (this.lastSource === "notes") this.renderer.setCursor(seconds, follow);
+				this.updateNoteTime();
+			},
+			onStateChange: () => this.updateNotePlayer(),
+			onMessage: (text, type) => {
+				this.noteMessage.textContent = text;
+				this.noteMessage.className = `note-message ${type === "error" ? "text-error" : "text-sub"}`;
 			},
 		});
 
-		// 악보 클릭 → 원본 음원 해당 위치로 이동 후 재생
+		// 피아노롤 클릭 → 마지막으로 쓴 재생기(원본 음원 / 악기 소리)로 그 위치부터 재생
 		this.renderer.onSeek = (seconds) => {
+			if (this.lastSource === "notes") {
+				this.notePlayer.seek(seconds, true);
+				return;
+			}
 			this.player.seek(seconds);
 			// 브라우저가 재생을 막는 경우(파일 오류 등)에도 화면이 멈추지 않게
 			this.player.audio.play().catch((error) => console.warn(error));
@@ -81,6 +105,7 @@ export class App {
 		this.cancelRequested = false; // 사용자가 채보 취소를 눌렀는지
 		this.retryAction = null; // 재시도 버튼이 실행할 함수 (실패 종류에 따라 다름)
 		this.retryKind = null;   // "model"(모델 준비 실패) | "transcribe"(채보 실패)
+		this.lastSource = "original"; // 피아노롤 커서·클릭이 따를 재생기: "original" | "notes"
 	}
 
 	async init() {
@@ -93,6 +118,22 @@ export class App {
 		this.startButton.addEventListener("click", () => this.handleStart());
 		this.retryButton.addEventListener("click", () => this.retryAction?.());
 		this.cancelButton.addEventListener("click", () => this.handleCancel());
+		// 악기 소리로 듣기: 원본 음원은 멈추고 같은 화면 커서를 이어받음
+		this.notePlayButton.addEventListener("click", () => {
+			if (!this.notePlayer.isPlaying) {
+				this.player.audio.pause();
+				this.useSource("notes");
+			}
+			this.notePlayer.toggle();
+		});
+		this.noteMuteButton.addEventListener("click", () => {
+			this.notePlayer.setMuted(!this.notePlayer.isMuted);
+		});
+		// 원본 음원을 재생하면 악기 소리는 멈춤 (두 소리가 겹치지 않게)
+		this.player.audio.addEventListener("play", () => {
+			this.notePlayer.pause();
+			this.useSource("original");
+		});
 		// 피아노롤 / 악보 탭 전환
 		this.viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
 			tab.addEventListener("click", () => this.setView(tab.dataset.view));
@@ -100,6 +141,7 @@ export class App {
 		// 페이지를 떠날 때 Object URL과 모델 세션 해제
 		window.addEventListener("pagehide", () => {
 			this.player.release();
+			this.notePlayer.dispose();
 			this.modelService.dispose();
 		});
 		// 뒤로/앞으로 가기로 돌아왔을 때(bfcache) 이미 해제된 상태이므로 새로 시작
@@ -211,9 +253,17 @@ export class App {
 	showResult({ notes, chunkStatuses = [] }) {
 		const instruments = this.renderer.render(notes, chunkStatuses);
 		this.instrumentLegend.render(instruments);
-		this.sheetView.setResult(notes, instruments);
+		// 노래 제목 = MP3 파일 이름에서 확장자(.mp3)를 뺀 것 (악보 제목에 사용)
+		const songTitle = (this.audioInput.files[0]?.name ?? "").replace(/\.[^.]+$/, "");
+		this.sheetView.setResult(notes, instruments, songTitle);
 		this.viewTabs.classList.remove("is-hidden");
 		this.renderer.setCursor(this.player.audio.currentTime, false);
+
+		// 악기 소리 재생: 피아노롤과 같은 규칙으로 거른 음표 사용
+		this.notePlayer.setNotes(notes.filter((note) => ScoreRenderer.isValidNote(note)));
+		this.noteMessage.textContent = "";
+		this.notePlayerArea.classList.toggle("is-hidden", instruments.length === 0);
+		this.updateNotePlayer();
 
 		// 음높이 있는 음표와 드럼을 나눠서 셈 (드럼은 맨 아래 드럼 줄에 표시)
 		const pitched = notes.filter((note) => !note.isDrum).length;
@@ -253,6 +303,10 @@ export class App {
 		this.renderer.clear();
 		this.instrumentLegend.clear();
 		this.sheetView.clear();
+		this.notePlayer.clear();
+		this.useSource("original");
+		this.noteMessage.textContent = "";
+		this.notePlayerArea.classList.add("is-hidden");
 		this.setView("roll");
 		this.viewTabs.classList.add("is-hidden");
 		this.progressBar.hide();
@@ -270,8 +324,42 @@ export class App {
 		});
 		this.rollArea.classList.toggle("is-hidden", view !== "roll");
 		this.sheetPanel.classList.toggle("is-hidden", view !== "sheet");
-		if (view === "sheet") this.sheetView.show();
-		else this.sheetView.hide();
+		if (view === "sheet") {
+			this.notePlayer.pause(); // 악보 탭은 자기 재생기를 씀
+			this.sheetView.show();
+		} else {
+			this.sheetView.hide();
+		}
+	}
+
+	// ---------- 악기 소리 재생 표시 ----------
+	// 피아노롤 커서가 따를 재생기를 바꾸고 커서를 그 위치로 옮김
+	useSource(source) {
+		if (this.lastSource === source) return;
+		this.lastSource = source;
+		const seconds = source === "notes" ? this.notePlayer.currentTime : this.player.audio.currentTime;
+		this.renderer.setCursor(seconds, false);
+	}
+
+	updateNotePlayer() {
+		const notePlayer = this.notePlayer;
+		if (notePlayer.isPreparing) {
+			this.notePlayButton.textContent = "소리 준비 중...";
+		} else {
+			this.notePlayButton.textContent = notePlayer.isPlaying ? "⏸ 일시정지" : "▶ 악기 소리로 듣기";
+		}
+		this.notePlayButton.disabled = notePlayer.isPreparing;
+		this.noteMuteButton.textContent = notePlayer.isMuted ? "음소거 해제" : "음소거";
+		this.noteMuteButton.setAttribute("aria-pressed", String(notePlayer.isMuted));
+		this.updateNoteTime();
+	}
+
+	updateNoteTime() {
+		const format = (seconds) => {
+			const total = Math.max(0, Math.floor(seconds));
+			return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+		};
+		this.noteTimeText.textContent = `${format(this.notePlayer.currentTime)} / ${format(this.notePlayer.duration)}`;
 	}
 
 	// ---------- 버튼·상태 표시 ----------

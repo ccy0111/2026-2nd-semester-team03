@@ -66,7 +66,7 @@ export class ModelService {
 	}
 
 	// MP3 File → { notes, chunkStatuses }
-	async transcribe(file, onProgress, { boundaryMode } = {}) {
+	async transcribe(file, onProgress, { boundaryMode, allowedPrograms } = {}) {
 		if (!this.isReady) {
 			throw new Error("모델이 아직 준비되지 않았습니다.");
 		}
@@ -90,7 +90,7 @@ export class ModelService {
 
 		// pcm.buffer를 복사하지 않고 워커로 넘김(transfer) → 큰 음원도 빠르게 전달
 		return this.request(
-			{ type: "transcribe", pcm, maxGenLen: DEV_MAX_GEN_LEN, boundaryMode },
+			{ type: "transcribe", pcm, maxGenLen: DEV_MAX_GEN_LEN, boundaryMode, allowedPrograms },
 			onProgress,
 			[pcm.buffer],
 		);

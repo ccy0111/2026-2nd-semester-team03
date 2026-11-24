@@ -112,7 +112,7 @@ export class AbcBuilder {
 	// ---------- ABC 만들기 ----------
 	// options: { notes, instrumentKey, instrumentName, bpm, beatsPerBar, startSec }
 	// 반환: { abc, tablature } (tablature는 기타 오선보+타브일 때 abcjs에 넘길 설정)
-	static build({ notes, instrumentKey, instrumentName = "", bpm, beatsPerBar = 4, startSec = 0, withTab = false }) {
+	static build({ notes, instrumentKey, instrumentName = "", songTitle = "", bpm, beatsPerBar = 4, startSec = 0, withTab = false }) {
 		const secPerTick = 60 / bpm / TICKS_PER_BEAT;
 		const barTicks = beatsPerBar * TICKS_PER_BEAT;
 
@@ -155,7 +155,8 @@ export class AbcBuilder {
 		// 머리말
 		const lines = [
 			"X:1",
-			`T:${AbcBuilder.escapeText(instrumentName)}`,
+			`T:${AbcBuilder.escapeText(songTitle || "제목 없음")}`, // 큰 제목: 노래 제목
+			`T:${AbcBuilder.escapeText(instrumentName)}`,           // 두 번째 T: → 작은 부제목: 악기명
 			`M:${beatsPerBar}/4`,
 			"L:1/16",
 			`Q:1/4=${Math.round(bpm)}`,
