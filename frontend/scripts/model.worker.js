@@ -5,7 +5,7 @@
 //
 // 메인 → 워커 메시지
 //   { type: "load" }
-//   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode }
+//   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode, allowedPrograms }
 // 워커 → 메인 메시지
 //   { type: "loaded" }
 //   { type: "progress", progress: { completedChunks, totalChunks, chunkStatus } }
@@ -32,7 +32,7 @@ self.addEventListener("message", async (event) => {
 			self.postMessage({ type: "loaded" });
 		}
 		if (type === "transcribe") {
-			const result = await transcribe(event.data.pcm, event.data.maxGenLen, event.data.boundaryMode);
+			const result = await transcribe(event.data.pcm, event.data.maxGenLen, event.data.boundaryMode, event.data.allowedPrograms);
 			self.postMessage({ type: "result", ...result });
 		}
 	} catch (error) {
@@ -48,7 +48,7 @@ async function loadModel() {
 	});
 }
 
-async function transcribe(pcm, maxGenLen, boundaryMode) {
+async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms) {
 	if (!model) {
 		throw new Error("모델이 아직 준비되지 않았습니다.");
 	}
@@ -64,6 +64,7 @@ async function transcribe(pcm, maxGenLen, boundaryMode) {
 	if (boundaryMode != null) { // undefined·null이면 모델 기본값(pitch-tie)
 		options.boundaryMode = boundaryMode;
 	}
+	if (allowedPrograms !== undefined) options.allowedPrograms = allowedPrograms;
 	const result = await model.transcribePcm(pcm, options);
 	return { notes: result.notes, chunkStatuses: result.chunkStatuses };
 }
