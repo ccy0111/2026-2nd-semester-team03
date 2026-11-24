@@ -9,6 +9,11 @@
 	<link rel="stylesheet" href="/static/styles/root.css">
 	<link rel="stylesheet" href="/static/styles/style.css">
 
+	<!-- abcjs: 오선 악보 그리기·재생 라이브러리 (MIT). 전역 변수 ABCJS 생성 -->
+	<!-- defer: 화면을 먼저 그리고 실행 (main.js보다 먼저 실행되는 순서는 그대로) -->
+	<!-- 재생 버튼 모양은 abcjs-audio.css(인터넷) 대신 style.css에 직접 작성 -->
+	<script defer src="/static/vendor/abcjs-basic-min.js"></script>
+
 	<!-- ONNX Runtime Web은 scripts/model.worker.js 안에서 불러옴 -->
 	<script type="module" src="/static/scripts/main.js"></script>
 </head>
@@ -58,21 +63,59 @@
 				<a id="download-link" class="btn btn-outline">원본 MP3 다운로드</a>
 			</div>
 
-			<!-- 구간 상태 범례 + 요약 (채보가 끝나면 보임) -->
-			<div id="score-legend" class="score-legend is-hidden">
-				<span class="legend-item"><span class="legend-box legend-failed"></span>채보 실패 구간</span>
-				<span class="legend-item"><span class="legend-box legend-recovered"></span>재시도로 복구된 구간</span>
-				<span class="legend-item"><span class="legend-line"></span>현재 재생 위치</span>
-				<span id="score-summary" class="text-sub"></span>
+			<!-- 보기 전환 탭 (채보가 끝나면 보임) -->
+			<div id="view-tabs" class="view-tabs is-hidden" role="tablist">
+				<button type="button" class="view-tab is-active" data-view="roll" role="tab">피아노롤</button>
+				<button type="button" class="view-tab" data-view="sheet" role="tab">악보</button>
 			</div>
 
-			<!-- 악기별 색 + 보이기/숨기기 (채보가 끝나면 보임) -->
-			<div id="instrument-legend" class="instrument-legend is-hidden"></div>
+			<!-- ===== 피아노롤 보기 ===== -->
+			<div id="roll-area">
+				<!-- 구간 상태 범례 + 요약 (채보가 끝나면 보임) -->
+				<div id="score-legend" class="score-legend is-hidden">
+					<span class="legend-item"><span class="legend-box legend-failed"></span>채보 실패 구간</span>
+					<span class="legend-item"><span class="legend-box legend-recovered"></span>재시도로 복구된 구간</span>
+					<span class="legend-item"><span class="legend-line"></span>현재 재생 위치</span>
+					<span id="score-summary" class="text-sub"></span>
+				</div>
 
-			<div id="score-view" class="score-view">
-				<p class="text-sub">채보가 끝나면 여기에 음표가 표시됩니다.</p>
+				<!-- 악기별 색 + 보이기/숨기기 (채보가 끝나면 보임) -->
+				<div id="instrument-legend" class="instrument-legend is-hidden"></div>
+
+				<div id="score-view" class="score-view">
+					<p class="text-sub">채보가 끝나면 여기에 음표가 표시됩니다.</p>
+				</div>
+				<p class="score-help text-sub">악보를 클릭하면 그 위치부터 원본 음원을 재생합니다.</p>
 			</div>
-			<p class="score-help text-sub">악보를 클릭하면 그 위치부터 원본 음원을 재생합니다.</p>
+
+			<!-- ===== 악보 보기 (오선보 / 기타 타브) ===== -->
+			<div id="sheet-panel" class="is-hidden">
+				<div class="sheet-controls">
+					<label class="sheet-field">악기
+						<select id="sheet-instrument"></select>
+					</label>
+					<label id="guitar-mode-field" class="sheet-field is-hidden">표시
+						<select id="sheet-guitar-mode">
+							<option value="staff">오선보</option>
+							<option value="tab">타브</option>
+							<option value="both">오선보 + 타브</option>
+						</select>
+					</label>
+					<label class="sheet-field">템포
+						<input type="number" id="sheet-bpm" min="40" max="240" step="1"> BPM
+					</label>
+					<label class="sheet-field">박자
+						<select id="sheet-meter">
+							<option value="4">4/4</option>
+							<option value="3">3/4</option>
+						</select>
+					</label>
+				</div>
+				<!-- abcjs 악보 재생 버튼 -->
+				<div id="sheet-audio" class="sheet-audio is-hidden"></div>
+				<p id="sheet-message" class="sheet-message text-sub" aria-live="polite"></p>
+				<div id="sheet-area" class="sheet-area"></div>
+			</div>
 		</section>
 	</main>
 </body>
