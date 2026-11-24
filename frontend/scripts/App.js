@@ -15,6 +15,7 @@ import { ProgressBar } from "./ProgressBar.js";
 import { AudioPlayer } from "./AudioPlayer.js";
 import { toUserMessage } from "./errorMessages.js";
 import { InstrumentLegend } from "./InstrumentLegend.js";
+import { SheetView } from "./SheetView.js";
 
 export class App {
 	constructor() {
@@ -28,6 +29,9 @@ export class App {
 		this.scoreLegend = document.querySelector("#score-legend");
 		this.scoreSummary = document.querySelector("#score-summary");
 		this.scoreView = document.querySelector("#score-view");
+		this.viewTabs = document.querySelector("#view-tabs");
+		this.rollArea = document.querySelector("#roll-area");
+		this.sheetPanel = document.querySelector("#sheet-panel");
 
 		// 기능 담당 객체
 		this.modelService = new ModelService();
@@ -37,10 +41,23 @@ export class App {
 			document.querySelector("#instrument-legend"),
 			(key, visible) => this.renderer.setInstrumentVisible(key, visible),
 		);
+		this.sheetView = new SheetView({
+			instrumentSelect: document.querySelector("#sheet-instrument"),
+			guitarModeSelect: document.querySelector("#sheet-guitar-mode"),
+			guitarModeField: document.querySelector("#guitar-mode-field"),
+			bpmInput: document.querySelector("#sheet-bpm"),
+			meterSelect: document.querySelector("#sheet-meter"),
+			audioArea: document.querySelector("#sheet-audio"),
+			sheetArea: document.querySelector("#sheet-area"),
+			messageText: document.querySelector("#sheet-message"),
+		});
 		this.player = new AudioPlayer({
 			audio: document.querySelector("#audio-player"),
 			downloadLink: document.querySelector("#download-link"),
-			onTimeUpdate: (seconds, follow) => this.renderer.setCursor(seconds, follow),
+			onTimeUpdate: (seconds, follow) => {
+				this.renderer.setCursor(seconds, follow);
+				this.sheetView.setOriginalTime(seconds, follow); // 타브 보기의 재생 위치
+			},
 		});
 
 		// 악보 클릭 → 원본 음원 해당 위치로 이동 후 재생
@@ -76,6 +93,10 @@ export class App {
 		this.startButton.addEventListener("click", () => this.handleStart());
 		this.retryButton.addEventListener("click", () => this.retryAction?.());
 		this.cancelButton.addEventListener("click", () => this.handleCancel());
+		// 피아노롤 / 악보 탭 전환
+		this.viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
+			tab.addEventListener("click", () => this.setView(tab.dataset.view));
+		});
 		// 페이지를 떠날 때 Object URL과 모델 세션 해제
 		window.addEventListener("pagehide", () => {
 			this.player.release();
@@ -190,6 +211,8 @@ export class App {
 	showResult({ notes, chunkStatuses = [] }) {
 		const instruments = this.renderer.render(notes, chunkStatuses);
 		this.instrumentLegend.render(instruments);
+		this.sheetView.setResult(notes, instruments);
+		this.viewTabs.classList.remove("is-hidden");
 		this.renderer.setCursor(this.player.audio.currentTime, false);
 
 		// 음높이 있는 음표와 드럼을 나눠서 셈 (드럼은 맨 아래 드럼 줄에 표시)
@@ -229,9 +252,26 @@ export class App {
 	resetResult() {
 		this.renderer.clear();
 		this.instrumentLegend.clear();
+		this.sheetView.clear();
+		this.setView("roll");
+		this.viewTabs.classList.add("is-hidden");
 		this.progressBar.hide();
 		this.scoreLegend.classList.add("is-hidden");
 		this.scoreSummary.textContent = "";
+	}
+
+	// ---------- 보기 전환 ----------
+	// view: "roll"(피아노롤) | "sheet"(악보)
+	setView(view) {
+		this.viewTabs.querySelectorAll(".view-tab").forEach((tab) => {
+			const active = tab.dataset.view === view;
+			tab.classList.toggle("is-active", active);
+			tab.setAttribute("aria-selected", String(active));
+		});
+		this.rollArea.classList.toggle("is-hidden", view !== "roll");
+		this.sheetPanel.classList.toggle("is-hidden", view !== "sheet");
+		if (view === "sheet") this.sheetView.show();
+		else this.sheetView.hide();
 	}
 
 	// ---------- 버튼·상태 표시 ----------

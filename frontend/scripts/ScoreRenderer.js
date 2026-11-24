@@ -66,7 +66,7 @@ export class ScoreRenderer {
 	// 반환값: 그려진 악기 목록 [{ key, name, color, count }] (범례용)
 	render(notes, chunkStatuses = []) {
 		// 값이 이상한 음표·구간은 그리지 않음 (그림 전체가 깨지는 것 방지)
-		const valid = notes.filter((note) => this.isValidNote(note));
+		const valid = notes.filter((note) => ScoreRenderer.isValidNote(note));
 		const melodic = valid.filter((note) => !note.isDrum);
 		const drums = valid.filter((note) => note.isDrum);
 		chunkStatuses = chunkStatuses.filter((chunk) => this.isValidChunk(chunk));
@@ -340,7 +340,8 @@ export class ScoreRenderer {
 	}
 
 	// ---------- 도우미 ----------
-	isValidNote(note) {
+	// static: 악보 탭(SheetView)도 같은 규칙으로 음표를 거르도록 class 이름으로 부를 수 있게 함
+	static isValidNote(note) {
 		return Number.isFinite(note.pitch) && note.pitch >= 0 && note.pitch <= 127
 			&& Number.isFinite(note.onset) && Number.isFinite(note.offset)
 			&& note.onset >= 0 && note.offset >= note.onset;

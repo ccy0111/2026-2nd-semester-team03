@@ -287,3 +287,239 @@
 	from { background-position: 0 0; }
 	to { background-position: 20px 0; }
 }
+
+/* ---------- 보기 전환 탭 ---------- */
+.view-tabs {
+	display: flex;
+	gap: var(--space-xs);
+	margin-bottom: var(--space-md);
+	border-bottom: 1px solid var(--color-line);
+}
+
+.view-tab {
+	padding: var(--space-sm) var(--space-md);
+	border: none;
+	border-bottom: 3px solid transparent;
+	background: none;
+	color: var(--color-sub);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.view-tab.is-active {
+	border-bottom-color: var(--color-primary);
+	color: var(--color-primary);
+}
+
+/* ---------- 악보 보기 ---------- */
+.sheet-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-sm) var(--space-md);
+	margin-bottom: var(--space-sm);
+	font-size: var(--font-size-sm);
+}
+
+.sheet-field {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-xs);
+}
+
+.sheet-field select,
+.sheet-field input {
+	padding: var(--space-xs) var(--space-sm);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+	font: inherit;
+}
+
+.sheet-field input {
+	width: 72px;
+}
+
+.sheet-audio {
+	margin-bottom: var(--space-sm);
+}
+
+.sheet-message {
+	margin-bottom: var(--space-sm);
+	font-size: var(--font-size-sm);
+}
+
+.sheet-area {
+	overflow-x: auto;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sm);
+	padding: var(--space-sm);
+	background-color: var(--color-white);
+	min-height: 120px;
+}
+
+/* ---------- abcjs 악보 재생 버튼 ----------
+	abcjs가 만드는 버튼의 class 이름(abcjs-...)은 그대로 두고 모양만 직접 정함
+	(원래 쓰던 abcjs-audio.css는 인터넷에서 받아야 해서, 오프라인이면 버튼이 깨졌음) */
+.abcjs-inline-audio {
+	display: flex;
+	flex-wrap: wrap; /* 좁은 화면에서는 속도 입력이 다음 줄로 */
+	align-items: center;
+	gap: var(--space-xs);
+	max-width: 560px;
+	padding: var(--space-xs) var(--space-sm);
+	border-radius: var(--radius-sm);
+	background-color: var(--color-main);
+	color: var(--color-white);
+	font-size: var(--font-size-sm);
+}
+
+.abcjs-inline-audio.abcjs-disabled {
+	opacity: 0.5;
+}
+
+.abcjs-inline-audio .abcjs-btn {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	padding: 7px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: none;
+	cursor: pointer;
+}
+
+.abcjs-inline-audio .abcjs-btn:hover,
+.abcjs-inline-audio .abcjs-btn:focus-visible {
+	border-color: var(--color-sub);
+}
+
+.abcjs-inline-audio .abcjs-btn svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.abcjs-inline-audio .abcjs-btn g {
+	fill: var(--color-white);
+	stroke: var(--color-white);
+}
+
+/* 재생 버튼: 평소엔 ▶, 재생 중엔 ❚❚, 준비 중엔 도는 원 */
+.abcjs-inline-audio .abcjs-midi-start .abcjs-pause-svg,
+.abcjs-inline-audio .abcjs-midi-start .abcjs-loading-svg,
+.abcjs-inline-audio .abcjs-midi-start.abcjs-pushed .abcjs-play-svg,
+.abcjs-inline-audio .abcjs-midi-start.abcjs-loading .abcjs-play-svg,
+.abcjs-inline-audio .abcjs-midi-start.abcjs-loading .abcjs-pause-svg {
+	display: none;
+}
+
+.abcjs-inline-audio .abcjs-midi-start.abcjs-pushed .abcjs-pause-svg,
+.abcjs-inline-audio .abcjs-midi-start.abcjs-loading .abcjs-loading-svg {
+	display: block;
+}
+
+.abcjs-inline-audio .abcjs-loading-svg circle {
+	stroke: var(--color-white);
+}
+
+.abcjs-inline-audio .abcjs-midi-start.abcjs-loading {
+	animation: abcjs-spin 1s linear infinite;
+}
+
+@keyframes abcjs-spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
+/* 진행 막대: 누르기 쉽게 버튼 높이는 24px, 보이는 막대는 가운데 8px */
+.abcjs-inline-audio .abcjs-midi-progress-background {
+	position: relative;
+	flex: 1;
+	min-width: 60px;
+	height: 24px;
+	margin: 0 var(--space-sm);
+	padding: 0;
+	border: none;
+	background: linear-gradient(var(--color-sub), var(--color-sub)) center / 100% 8px no-repeat;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.abcjs-inline-audio .abcjs-midi-progress-indicator {
+	position: absolute;
+	top: 4px;
+	left: 0;
+	width: 16px;
+	height: 16px;
+	margin-left: -8px;
+	border-radius: 50%;
+	background-color: var(--color-white);
+}
+
+.abcjs-inline-audio .abcjs-midi-clock {
+	min-width: 36px;
+	font-variant-numeric: tabular-nums;
+}
+
+.abcjs-inline-audio .abcjs-tempo-wrapper {
+	display: flex;
+	align-items: center;
+	white-space: nowrap;
+}
+
+.abcjs-inline-audio .abcjs-midi-tempo {
+	width: 52px;
+	height: 24px;
+	margin-right: 2px;
+	border: none;
+	border-radius: 4px;
+	font: inherit;
+	color: var(--color-main);
+}
+
+/* "CSS required" 경고 상자는 위에서 직접 꾸몄으므로 숨김 */
+.abcjs-css-warning {
+	display: none;
+}
+
+/* abcjs 재생 중인 음표 + 세로선 */
+.sheet-area .abcjs-highlight {
+	fill: var(--color-cursor);
+}
+
+.sheet-area .abcjs-cursor {
+	stroke: var(--color-cursor);
+	stroke-width: 2;
+}
+
+/* ---------- 기타 타브 (시간 기준) ---------- */
+.tab-svg {
+	display: block;
+}
+
+.tab-string {
+	stroke: var(--color-sub);
+	stroke-width: 1;
+}
+
+.tab-string-name {
+	fill: var(--color-sub);
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.tab-fret-bg {
+	fill: var(--color-white);
+}
+
+.tab-fret-text {
+	fill: var(--color-main);
+	font-size: 12px;
+	font-weight: 700;
+	font-family: monospace;
+}
+
+.tab-fret.is-unplayable .tab-fret-text {
+	fill: var(--color-error);
+}
