@@ -123,25 +123,33 @@ export class WebMelProcessor {
     });
     this.fft = new Radix2FFT(N_FFT);
     this._frameBuf = new Float32Array(N_FFT);
+    this._padded = new Float32Array(CHUNK_SAMPLES + N_FFT);
     this._magBuf = new Float32Array((N_FFT >> 1) + 1);
   }
 
   computeChunkLogMel(pcm5s) {
-    const input = new Float32Array(CHUNK_SAMPLES);
-    input.set(pcm5s.subarray(0, Math.min(pcm5s.length, CHUNK_SAMPLES)));
-
     const pad = N_FFT >> 1;
-    const paddedLen = CHUNK_SAMPLES + 2 * pad;
-    const padded = new Float32Array(paddedLen);
-    padded.set(input, pad);
+    const padded = this._padded;
+    const paddedLen = padded.length;
+    const inputLength = Math.min(pcm5s.length, CHUNK_SAMPLES);
+    const numFrames = Math.floor((paddedLen - N_FFT) / HOP_LENGTH) + 1;
+    const out = new Float32Array(numFrames * N_MELS);
+    // Exactly-zero PCM produces an exactly-zero spectrum, including after
+    // reflect padding. Avoid FFTs only for proven digital silence, no threshold.
+    let firstNonzero = 0;
+    while (firstNonzero < inputLength && pcm5s[firstNonzero] === 0) firstNonzero++;
+    if (firstNonzero === inputLength) {
+      out.fill(Math.log(MEL_EPS));
+      return { data: out, dims: [1, numFrames, N_MELS] };
+    }
+    padded.set(pcm5s.subarray(0, inputLength), pad);
+    padded.fill(0, pad + inputLength, pad + CHUNK_SAMPLES);
     for (let i = 0; i < pad; i++) {
-      padded[pad - 1 - i] = input[i + 1];
-      padded[pad + CHUNK_SAMPLES + i] = input[CHUNK_SAMPLES - 2 - i];
+      padded[pad - 1 - i] = padded[pad + i + 1];
+      padded[pad + CHUNK_SAMPLES + i] = padded[pad + CHUNK_SAMPLES - 2 - i];
     }
 
-    const numFrames = Math.floor((paddedLen - N_FFT) / HOP_LENGTH) + 1;
     const nFreqs = (N_FFT >> 1) + 1;
-    const out = new Float32Array(numFrames * N_MELS);
 
     for (let f = 0; f < numFrames; f++) {
       const start = f * HOP_LENGTH;

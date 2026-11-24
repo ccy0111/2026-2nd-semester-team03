@@ -91,6 +91,30 @@ class BrowserApiTests(unittest.TestCase):
                     self.assertIn("javascript", response.headers["content-type"])
                     self.assertIn("export ", response.text)
 
+    def test_default_frontend_serves_checked_in_soundfont_runtime(self):
+        root = Path(__file__).resolve().parents[1]
+        assets = root / "frontend" / "vendor" / "soundfont"
+        files = {
+            "dist/grouped-player.mjs": "javascript",
+            "dist/spessasynth_processor.min.js": "javascript",
+            "soundfonts.json": "application/json",
+            "licenses/MuScriptor.txt": "text/plain",
+            "licenses/fflate.txt": "text/plain",
+            "licenses/spessasynth_core.txt": "text/plain",
+            "licenses/spessasynth_lib.txt": "text/plain",
+            "licenses/stb-vorbis.txt": "text/plain",
+        }
+        with TestClient(create_app()) as client:
+            for name, media_type in files.items():
+                with self.subTest(name=name):
+                    response = client.get(f"/static/vendor/soundfont/{name}")
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn(media_type, response.headers["content-type"])
+                    self.assertTrue(response.content)
+                    self.assertEqual(response.content, (assets / name).read_bytes())
+            manifest = client.get("/static/vendor/soundfont/soundfonts.json").json()
+            self.assertEqual(len(manifest["banks"]), 7)
+
     def test_built_frontend_is_served_from_configured_directory(self):
         with TemporaryDirectory() as directory:
             frontend = Path(directory)

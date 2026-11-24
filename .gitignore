@@ -15,3 +15,18 @@ __pycache__/
 *.py[cod]
 .venv/
 node_modules/
+
+# SoundFont: ship only the browser bundle, CDN manifest and redistribution notices.
+/frontend/vendor/soundfont/*
+!/frontend/vendor/soundfont/soundfonts.json
+!/frontend/vendor/soundfont/dist/
+/frontend/vendor/soundfont/dist/*
+!/frontend/vendor/soundfont/dist/grouped-player.mjs
+!/frontend/vendor/soundfont/dist/spessasynth_processor.min.js
+!/frontend/vendor/soundfont/licenses/
+/frontend/vendor/soundfont/licenses/*
+!/frontend/vendor/soundfont/licenses/MuScriptor.txt
+!/frontend/vendor/soundfont/licenses/fflate.txt
+!/frontend/vendor/soundfont/licenses/spessasynth_core.txt
+!/frontend/vendor/soundfont/licenses/spessasynth_lib.txt
+!/frontend/vendor/soundfont/licenses/stb-vorbis.txt

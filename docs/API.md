@@ -96,6 +96,12 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 | `offset` | 숫자 | 원본 음원 기준 종료 시각, 단위는 초. |
 | `isDrum` | 불리언 | 타악기 여부. |
 
+### 선택적 악기 제한
+
+`model.transcribeAudio(file, { allowedPrograms })`와 `model.transcribePcm(pcm16k, { allowedPrograms })`에 허용 악기 번호를 넘길 수 있다. 생략하면 기존과 동일하게 악기를 자동으로 인식한다. 값은 MIDI 악기 번호 `0..127`과 타악기 코드 `128` 중 하나 이상을 담은 정수 배열이어야 한다. 예를 들어 `[0]`은 어쿠스틱 그랜드 피아노만, `[0, 128]`은 해당 피아노와 타악기를 허용한다. 빈 배열은 허용하지 않는다.
+
+브라우저 디코더가 생성 단계에서 다른 악기 토큰을 제외하며, 같은 제한이 모든 청크와 재시도에 적용된다. 음원에서 악기 소리를 분리하거나 다른 피아노 계열 프로그램을 자동으로 포함하는 기능은 아니다. 프론트는 `modelService.transcribe(file, onProgress, { allowedPrograms: [0] })`로 넘길 수 있고, 워커 메시지의 `allowedPrograms`도 같은 형식을 사용한다. 백엔드나 모델 매니페스트는 변경할 필요가 없다.
+
 Vite에서 백엔드가 제공하는 추론 모듈을 런타임에 가져오는 예시는 다음과 같다.
 
 ```js
