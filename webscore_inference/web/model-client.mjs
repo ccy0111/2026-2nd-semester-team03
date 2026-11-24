@@ -28,6 +28,17 @@ function validateTokenLimit(maxGenLen) {
   if (!Number.isInteger(maxGenLen) || maxGenLen < 1) throw new RangeError("maxGenLen must be a positive integer");
 }
 
+const DRUM_PROGRAM = 128;
+
+function normalizeAllowedPrograms(programs) {
+  if (programs === undefined) return undefined;
+  if (!Array.isArray(programs) || !programs.length ||
+      [...programs].some(program => !Number.isInteger(program) || program < 0 || program > DRUM_PROGRAM)) {
+    throw new RangeError("allowedPrograms must be a non-empty array of integers from 0 to 128");
+  }
+  return [...new Set(programs)];
+}
+
 function argmaxMasked(logitsRow, maskedSet) {
   let bestId = -1;
   let bestScore = -Infinity;
@@ -47,9 +58,7 @@ function buildCausalMask(seqLen, pastLen) {
   for (let r = 0; r < seqLen; r++) {
     const maxCol = pastLen + r;
     const rowOff = r * total;
-    for (let c = 0; c < total; c++) {
-      mask[rowOff + c] = c <= maxCol ? 0.0 : -1e9;
-    }
+    mask.fill(-1e9, rowOff + maxCol + 1, rowOff + total);
   }
   return mask;
 }
@@ -146,7 +155,7 @@ export class WebScoreClient {
 
   async embedTokenIds(ids) {
     if (!this.cacheEmbeddings) {
-      const input_ids = new this.ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]);
+      const input_ids = new this.ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]);
       return (await this.embedSession.run({ input_ids })).token_embeds;
     }
     if (!this.embeddingTable) {
@@ -162,10 +171,23 @@ export class WebScoreClient {
     return new this.ort.Tensor("float32", data, [1, ids.length, dim]);
   }
 
-  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024, signal = null } = {}) {
+  async transcribeChunk(pcm5s, { promptTokens = [], maxGenLen = 1024, signal = null, allowedPrograms } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     validateTokenLimit(maxGenLen);
     throwIfAborted(signal);
+    const programs = normalizeAllowedPrograms(allowedPrograms);
+    let maskedIds = this.maskedIds;
+    if (programs !== undefined) {
+      const allowed = new Set(programs);
+      maskedIds = new Set(maskedIds);
+      for (const { id, kind, value } of this.lookup.idToEvent) {
+        if ((kind === "inst" && (value >= DRUM_PROGRAM || !allowed.has(value))) ||
+            (kind === "drum" && !allowed.has(DRUM_PROGRAM))) maskedIds.add(id);
+      }
+      if (promptTokens.some(id => maskedIds.has(id))) {
+        throw new RangeError("promptTokens contain tokens not permitted by allowedPrograms");
+      }
+    }
     const { data: melData, dims: melDims } = this.mel.computeChunkLogMel(pcm5s);
     const melTensor = new this.ort.Tensor("float32", melData, melDims);
     const encOut = await this.encoderSession.run({ mel: melTensor });
@@ -196,13 +218,19 @@ export class WebScoreClient {
     let stepEmbeds = new this.ort.Tensor("float32", prefillData, [1, prefillLen, hiddenDim]);
     let posOffset = 0;
     const generated = [...promptTokens];
+    // Single-token causal rows are all zero. Reuse bounded storage for their
+    // views instead of allocating and clearing an O(past length) buffer per token.
+    const decodeMask = maxGenLen > 1 ? new Float32Array(prefillLen + Math.min(maxGenLen - 1, 4096)) : null;
 
     try {
       for (let step = 0; step < maxGenLen; step++) {
         throwIfAborted(signal);
         const seqLen = stepEmbeds.dims[1];
         const pastLen = pastK.dims[3];
-        const maskTensor = new this.ort.Tensor("float32", buildCausalMask(seqLen, pastLen), [1, 1, seqLen, pastLen + seqLen]);
+        const total = pastLen + seqLen;
+        const maskData = step > 0 && seqLen === 1 && total <= decodeMask.length
+          ? decodeMask.subarray(0, total) : buildCausalMask(seqLen, pastLen);
+        const maskTensor = new this.ort.Tensor("float32", maskData, [1, 1, seqLen, total]);
         const posTensor = new this.ort.Tensor("int64", BigInt64Array.from([BigInt(posOffset)]), [1]);
 
         const decOut = await this.decoderSession.run({
@@ -226,7 +254,8 @@ export class WebScoreClient {
         const logitRows = decOut.logits.dims[1];
         if (logitRows !== 1 && logitRows !== seqLen) throw new Error("Invalid decoder logits shape");
         const lastRow = logitsArr.subarray((logitRows - 1) * vocabSize, logitRows * vocabSize);
-        const nextTok = argmaxMasked(lastRow, this.maskedIds);
+        const nextTok = argmaxMasked(lastRow, maskedIds);
+        if (programs !== undefined && nextTok < 0) throw new Error("No valid token available for allowedPrograms");
         generated.push(nextTok);
 
         if (nextTok === this.lookup.eosId) return generated;
@@ -242,12 +271,17 @@ export class WebScoreClient {
     }
   }
 
-  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "pitch-tie" } = {}) {
+  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "pitch-tie", allowedPrograms } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     if (this.transcribing) throw new Error("A transcription is already running");
     validateTokenLimit(maxGenLen);
     if (!["legacy", "prelude-forcing", "pitch-tie"].includes(boundaryMode)) throw new RangeError("Unsupported boundaryMode");
     throwIfAborted(signal);
+    // Snapshot the caller's list before any await (all chunks and retries use it).
+    const programs = normalizeAllowedPrograms(allowedPrograms);
+    const allowed = programs === undefined ? null : new Set(programs);
+    const keepsProgram = note => allowed.has(note.isDrum ? DRUM_PROGRAM : note.program);
+    const chunkOptions = programs === undefined ? { maxGenLen, signal } : { maxGenLen, signal, allowedPrograms: programs };
     this.transcribing = true;
     try {
       const chunks = splitPcmInto5sChunks(pcm16k);
@@ -264,7 +298,7 @@ export class WebScoreClient {
         const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, pcm16k.length / 16000), status: "ok", attempts: 1, boundaryReset: false };
         let tokens;
         try {
-          tokens = await this.transcribeChunk(pcm, { promptTokens, maxGenLen, signal });
+          tokens = await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens });
         } catch (error) {
           throwIfAborted(signal);
           if (!(error instanceof TokenLimitError)) throw error;
@@ -276,7 +310,7 @@ export class WebScoreClient {
           chunkStatus.reason = "token_limit";
           chunkStatus.attempts = 2;
           try {
-            tokens = await this.transcribeChunk(pcm, { promptTokens: encodeTiePrologue([], this.lookup), maxGenLen, signal });
+            tokens = await this.transcribeChunk(pcm, { ...chunkOptions, promptTokens: encodeTiePrologue([], this.lookup) });
             chunkStatus.status = "recovered";
           } catch (retryError) {
             throwIfAborted(signal);
@@ -289,8 +323,10 @@ export class WebScoreClient {
         tokensByChunk.push(tokens);
         if (chunkStatus.status !== "failed") {
           const decoded = decodeChunkTokens(tokens, this.lookup, { chunkStartSec: startSec, openNotes, boundaryMode });
-          allNotes.push(...decoded.completed);
-          openNotes = decoded.nextOpenNotes;
+          // Legacy parsing can infer program 0 without an explicit inst token.
+          // Guard both output and carried notes before preparing the next prompt.
+          allNotes.push(...(allowed ? decoded.completed.filter(keepsProgram) : decoded.completed));
+          openNotes = allowed ? decoded.nextOpenNotes.filter(keepsProgram) : decoded.nextOpenNotes;
         }
         chunkStatuses.push(chunkStatus);
         if (onProgress) onProgress({ completedChunks: idx + 1, totalChunks: chunks.length, chunkStatus: { ...chunkStatus } });
