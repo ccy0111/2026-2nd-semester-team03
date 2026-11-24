@@ -8,7 +8,7 @@
 //   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode }
 // 워커 → 메인 메시지
 //   { type: "loaded" }
-//   { type: "progress", progress: { completedChunks, totalChunks } }
+//   { type: "progress", progress: { completedChunks, totalChunks, chunkStatus } }
 //   { type: "result", notes, chunkStatuses }
 //   { type: "error", message }
 // ==========================================================
@@ -61,7 +61,7 @@ async function transcribe(pcm, maxGenLen, boundaryMode) {
 	if (maxGenLen) {
 		options.maxGenLen = maxGenLen;
 	}
-	if (boundaryMode !== undefined) {
+	if (boundaryMode != null) { // undefined·null이면 모델 기본값(pitch-tie)
 		options.boundaryMode = boundaryMode;
 	}
 	const result = await model.transcribePcm(pcm, options);

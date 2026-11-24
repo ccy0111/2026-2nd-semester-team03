@@ -47,15 +47,72 @@
 
 .file-input {
 	flex: 1;
-	min-width: 220px;
+	min-width: min(220px, 100%);
 	padding: var(--space-sm);
 	border: 1px solid var(--color-line);
 	border-radius: var(--radius-sm);
 	font: inherit;
 }
 
-.status-text {
+.status-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-sm);
 	margin-top: var(--space-sm);
+}
+
+.status-text {
+	font-size: var(--font-size-sm);
+}
+
+/* ---------- 원본 MP3 재생·다운로드 ---------- */
+.player-area {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-sm);
+	margin-bottom: var(--space-md);
+}
+
+.audio-player {
+	flex: 1;
+	min-width: min(260px, 100%); /* 좁은 화면에서 넘치지 않게 */
+}
+
+/* ---------- 구간 상태 범례 ---------- */
+.score-legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-md);
+	margin-bottom: var(--space-sm);
+	font-size: var(--font-size-sm);
+}
+
+.legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-xs);
+}
+
+.legend-box {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+}
+
+.legend-failed { background-color: var(--color-chunk-failed); }
+.legend-recovered { background-color: var(--color-chunk-recovered); }
+
+.legend-line {
+	width: 3px;
+	height: 14px;
+	background-color: var(--color-cursor);
+}
+
+.score-help {
+	margin-top: var(--space-xs);
 	font-size: var(--font-size-sm);
 }
 
@@ -66,6 +123,11 @@
 	border-radius: var(--radius-sm);
 	padding: var(--space-sm);
 	min-height: 120px;
+}
+
+/* 악보가 그려졌을 때만 클릭 가능 표시 */
+.score-view:has(svg) {
+	cursor: pointer;
 }
 
 .score-svg {
@@ -85,10 +147,80 @@
 	font-size: 11px;
 }
 
+/* 음표 색은 악기별로 JS가 지정 (instruments.js), 여기는 기본값 */
 .score-note {
 	fill: var(--color-note);
-	stroke: var(--color-note-line);
+	stroke: rgba(0, 0, 0, 0.25);
 	stroke-width: 0.5;
+}
+
+/* 맨 아래 드럼 줄 */
+.score-drum-lane {
+	fill: var(--color-base);
+	stroke: var(--color-line);
+	stroke-width: 1;
+}
+
+.score-drum-hit {
+	opacity: 0.85;
+}
+
+/* ---------- 악기 범례 ---------- */
+.instrument-legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-xs) var(--space-md);
+	margin-bottom: var(--space-sm);
+	font-size: var(--font-size-sm);
+}
+
+.instrument-item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-xs);
+	cursor: pointer;
+}
+
+/* 시간 글자: 실패 구간(회색) 위에서도 보이도록 흰 테두리 */
+.score-time-label {
+	fill: var(--color-main);
+	stroke: var(--color-white);
+	stroke-width: 3px;
+	paint-order: stroke;
+	pointer-events: none;
+}
+
+.score-grid-line.is-strong {
+	stroke: var(--color-line);
+}
+
+/* 실패 구간: 회색 박스 + 글자 */
+.score-chunk-failed {
+	fill: var(--color-chunk-failed);
+	opacity: 0.85;
+}
+
+.score-chunk-label {
+	fill: var(--color-white);
+	font-size: 13px;
+	font-weight: 700;
+	text-anchor: middle;
+	dominant-baseline: middle;
+	pointer-events: none;
+}
+
+/* 복구 구간: 옅은 노란 박스 */
+.score-chunk-recovered {
+	fill: var(--color-chunk-recovered);
+	opacity: 0.6;
+}
+
+/* 현재 재생 위치 */
+.score-cursor {
+	stroke: var(--color-cursor);
+	stroke-width: 2;
+	pointer-events: none;
 }
 
 /* ---------- 로딩바 ---------- */

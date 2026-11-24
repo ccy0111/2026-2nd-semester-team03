@@ -23,6 +23,9 @@
 	--color-row-white: #ffffff;
 	--color-row-black: #f1f3f5;
 	--color-grid: #e9ecef;
+	--color-chunk-failed: #868e96;
+	--color-chunk-recovered: #ffe066;
+	--color-cursor: #e8590c;
 
 	/* 간격 */
 	--space-xs: 4px;
@@ -100,6 +103,19 @@ p {
 	font-weight: 600;
 	cursor: pointer;
 	transition: opacity 0.15s;
+}
+
+a.btn {
+	display: inline-block;
+	text-decoration: none;
+	text-align: center;
+}
+
+/* 테두리만 있는 보조 버튼 */
+.btn-outline {
+	border: 1px solid var(--color-primary);
+	background-color: var(--color-white);
+	color: var(--color-primary);
 }
 
 .btn:hover:not(:disabled) {

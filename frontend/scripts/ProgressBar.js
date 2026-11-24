@@ -16,15 +16,20 @@ export class ProgressBar {
 	start(message = "음원 분석 준비 중...") {
 		this.container.classList.remove("is-hidden", "is-done", "is-error");
 		this.container.classList.add("is-running");
+		// 이전 100%에서 0%로 미끄러지는 애니메이션 없이 바로 0%로
+		this.fill.style.transition = "none";
 		this.setValue(0);
+		void this.fill.offsetWidth; // 브라우저에 지금 상태를 먼저 반영시킴
+		this.fill.style.transition = "";
 		this.label.textContent = message;
 	}
 
 	// 모델의 onProgress 값 그대로 받기: { completedChunks, totalChunks }
-	update({ completedChunks, totalChunks }) {
+	// extraText: 뒤에 덧붙일 문구 (예: "(실패 구간 1개)")
+	update({ completedChunks, totalChunks }, extraText = "") {
 		const ratio = totalChunks > 0 ? completedChunks / totalChunks : 0;
 		this.setValue(ratio);
-		this.label.textContent = `채보 중... ${completedChunks} / ${totalChunks} 구간`;
+		this.label.textContent = `채보 중... ${completedChunks} / ${totalChunks} 구간 ${extraText}`.trim();
 	}
 
 	// 성공
