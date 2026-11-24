@@ -56,7 +56,7 @@ export class VersionedWebScoreClient {
 
   constructor(ort, { manifestUrl = DEFAULT_MANIFEST_URL, clientOptions = {}, pollIntervalMs = 60000,
     checkBeforeInference = true, manifestTimeoutMs = 15000, onUpdate = null, onUpdateError = null,
-    fetchImpl = globalThis.fetch, clientFactory = WebScoreClient.create.bind(WebScoreClient) } = {}) {
+    fetchImpl = (...args) => globalThis.fetch(...args), clientFactory = WebScoreClient.create.bind(WebScoreClient) } = {}) {
     const base = globalThis.location?.href;
     let parsed;
     try { parsed = base ? new URL(manifestUrl, base) : new URL(manifestUrl); } catch { throw new Error('Invalid manifest URL'); }
@@ -72,6 +72,7 @@ export class VersionedWebScoreClient {
     this.checkBeforeInference = checkBeforeInference;
     this.onUpdate = onUpdate;
     this.onUpdateError = onUpdateError;
+    // The default must call native fetch with the browser global as its receiver.
     this.fetchImpl = fetchImpl;
     this.clientFactory = clientFactory;
     this.client = null;
