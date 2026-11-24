@@ -176,3 +176,27 @@ test('extra required inputs and incorrect special tokens reject the replacement'
     assert.equal(client.modelVersion,'v1'); assert.equal(state.clients[1].disposed,true); await client.dispose();
   }
 });
+
+test('selects one explicit provider variant and rejects a mismatched variant without replacing the last client', async () => {
+ const gpuFiles = Object.fromEntries(['config.json','tokenizer.json','mel_encoder.onnx','token_embed.onnx','decoder_kv.onnx'].map(n=>[n,`./fp16/${n}`]));
+ const {state,options}=harness({manifestVariant:'webgpu'});
+ state.current={...manifest('with-fp16'),variants:{webgpu:{precision:'fp16',files:gpuFiles}}};
+ const c=await VersionedWebScoreClient.create({},options);
+ try {
+  assert.equal(state.clients[0].opts.useInt8,false);
+  assert.match(state.clients[0].opts.modelUrls['decoder_kv.onnx'],/\/fp16\/decoder_kv\.onnx$/);
+  assert.equal(state.clients[0].opts.modelUrls['decoder_kv.int8.onnx'],undefined);
+  state.current=manifest('no-fp16');
+  await assert.rejects(c.checkForUpdate(),/compatible model manifest/);
+  assert.equal(state.clients.length,1);
+  assert.equal(await c.transcribePcm(new Float32Array(1)),'https://models.example/fp16/config.json');
+ } finally {await c.dispose();}
+});
+test('WASM intentionally selects INT8 even when the manifest also has a WebGPU variant', async () => {
+ const {state,options}=harness({manifestVariant:'wasm'});
+ state.current={...manifest('top-int8'),variants:{webgpu:{precision:'fp16',files:{}},wasm:{precision:'int8',files:manifest('explicit-int8').files}}};
+ const c=await VersionedWebScoreClient.create({},options);
+ try {
+  assert.equal(state.clients[0].opts.useInt8,true);assert.match(state.clients[0].opts.modelUrls['decoder_kv.int8.onnx'],/\/explicit-int8\//);
+ } finally {await c.dispose();}
+});

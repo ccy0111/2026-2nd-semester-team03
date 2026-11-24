@@ -26,6 +26,7 @@ export class App {
 		this.startButton = document.querySelector("#start-button");
 		this.cancelButton = document.querySelector("#cancel-button");
 		this.retryButton = document.querySelector("#retry-button");
+		this.normalizeLoudness = document.querySelector("#normalize-loudness");
 		this.statusText = document.querySelector("#status-text");
 		this.playerArea = document.querySelector("#player-area");
 		this.scoreLegend = document.querySelector("#score-legend");
@@ -213,7 +214,7 @@ export class App {
 			const result = await this.modelService.transcribe(file, (progress) => {
 				if (progress.chunkStatus?.status === "failed") failedSoFar += 1;
 				this.progressBar.update(progress, failedSoFar ? `(실패 구간 ${failedSoFar}개)` : "");
-			});
+			}, { normalizeLoudness: this.normalizeLoudness.checked });
 			this.showResult(result);
 		} catch (error) {
 			console.error(error);
@@ -368,6 +369,7 @@ export class App {
 		const hasFile = this.audioInput.files.length > 0;
 		this.startButton.disabled = !this.modelService.isReady || !hasFile || this.isBusy;
 		this.audioInput.disabled = this.isBusy;
+		this.normalizeLoudness.disabled = this.isBusy;
 	}
 
 	showRetry(kind, label, action) {

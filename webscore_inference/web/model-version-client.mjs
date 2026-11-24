@@ -3,25 +3,29 @@ import { DEFAULT_MANIFEST_URL } from './model-config.mjs';
 
 const FILES = ['config.json', 'tokenizer.json', 'mel_encoder.onnx', 'token_embed.onnx'];
 
-function parseManifest(value, sourceUrl) {
+function parseManifest(value, sourceUrl, manifestVariant) {
   if (!value || value.schemaVersion !== 1 || value.format !== 'webscore-onnx-v1' ||
-      typeof value.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.version) ||
-      !['int8', 'fp32'].includes(value.precision)) {
+      typeof value.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.version)) {
     throw new Error('Unsupported model manifest');
   }
-  const names = [...FILES, value.precision === 'int8' ? 'decoder_kv.int8.onnx' : 'decoder_kv.onnx'];
+  const variant = manifestVariant === 'webgpu' ? value.variants?.webgpu :
+    manifestVariant === 'wasm' ? (value.variants?.wasm ?? value) : value;
+  const precisions = manifestVariant === 'webgpu' ? ['fp16'] :
+    manifestVariant === 'wasm' ? ['int8'] : ['int8', 'fp32'];
+  if (!precisions.includes(variant?.precision)) throw new Error('Unsupported model manifest');
+  const names = [...FILES, variant.precision === 'int8' ? 'decoder_kv.int8.onnx' : 'decoder_kv.onnx'];
   const modelUrls = {};
   for (const name of names) {
-    if (typeof value.files?.[name] !== 'string' || !value.files[name].trim()) throw new Error('Incomplete model manifest');
+    if (typeof variant.files?.[name] !== 'string' || !variant.files[name].trim()) throw new Error('Incomplete model manifest');
     let url;
-    try { url = new URL(value.files[name], sourceUrl); } catch { throw new Error('Invalid model URL'); }
+    try { url = new URL(variant.files[name], sourceUrl); } catch { throw new Error('Invalid model URL'); }
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
     if ((url.protocol !== 'https:' && !(local && url.protocol === 'http:')) || url.username || url.password || url.hash) {
       throw new Error('Invalid model URL');
     }
     modelUrls[name] = url.href;
   }
-  return { version: value.version, useInt8: value.precision === 'int8', modelUrls };
+  return { version: value.version, useInt8: variant.precision === 'int8', modelUrls };
 }
 
 function validateClient(client) {
@@ -54,7 +58,7 @@ export class VersionedWebScoreClient {
     return instance;
   }
 
-  constructor(ort, { manifestUrl = DEFAULT_MANIFEST_URL, clientOptions = {}, pollIntervalMs = 60000,
+  constructor(ort, { manifestUrl = DEFAULT_MANIFEST_URL, manifestVariant = null, clientOptions = {}, pollIntervalMs = 60000,
     checkBeforeInference = true, manifestTimeoutMs = 15000, onUpdate = null, onUpdateError = null,
     fetchImpl = (...args) => globalThis.fetch(...args), clientFactory = WebScoreClient.create.bind(WebScoreClient) } = {}) {
     const base = globalThis.location?.href;
@@ -66,7 +70,9 @@ export class VersionedWebScoreClient {
     if (!Number.isFinite(manifestTimeoutMs) || manifestTimeoutMs <= 0) throw new Error('Manifest timeout must be positive');
     this.manifestTimeoutMs = manifestTimeoutMs;
     this.ort = ort;
+    if (![null, 'webgpu', 'wasm'].includes(manifestVariant)) throw new Error('Unsupported model manifest variant');
     this.manifestUrl = parsed.href;
+    this.manifestVariant = manifestVariant;
     this.clientOptions = { ...clientOptions };
     this.pollIntervalMs = pollIntervalMs;
     this.checkBeforeInference = checkBeforeInference;
@@ -102,7 +108,7 @@ export class VersionedWebScoreClient {
       const request = (async () => {
         const response = await this.fetchImpl(this.manifestUrl, { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
         if (!response.ok) throw new Error('Manifest request failed');
-        return parseManifest(await response.json(), this.manifestUrl);
+        return parseManifest(await response.json(), this.manifestUrl, this.manifestVariant);
       })();
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => {
