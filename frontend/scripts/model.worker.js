@@ -40,6 +40,33 @@ self.addEventListener("message", async (event) => {
 });
 
 async function createForRuntime(VersionedWebScoreClient, provider, adapter) {
+	// Universal hardware WebGPU fast path (AMD, NVIDIA, Apple Silicon, Intel).
+	// Falls back cleanly to standard ORT WebGPU or WASM INT8 if unsupported.
+	const hwGpu = provider === "webgpu" && Boolean(adapter && !adapter.info?.isFallbackAdapter && adapter.features?.has("shader-f16"));
+	const options = { gpuKvCache: true, cacheEmbeddings: true, gpuTokenSelection: true,
+		gpuBatchPairs: hwGpu, gpuBatchWidth: hwGpu ? 8 : 2, gpuFeedbackBlock: hwGpu ? 4 : 0,
+		localLayerKv: hwGpu, gpuSerialFeedbackBlock: hwGpu ? 8 : 0, localProjectionFusion: hwGpu };
+	if (hwGpu && typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function") {
+		let candidate;
+		try {
+			const runtime = await import(`${ORT_BASE}ort.jspi.min.mjs`);
+			runtime.env.wasm.wasmPaths = ORT_BASE;
+			runtime.env.wasm.numThreads = 1;
+			runtime.env.webgpu.adapter = adapter;
+			candidate = await VersionedWebScoreClient.create(runtime, {
+				manifestVariant: "webgpu",
+				clientOptions: { executionProviders: ["webgpu"], ...options, gpuPendingDispatchLimit: 64 },
+			});
+			if (!candidate.client?.localProjectionFusion || candidate.client?.gpuSerialFeedbackBlock !== 8) {
+				throw new Error("Unsupported JSPI model interface");
+			}
+			candidate.runtimeBridge = "jspi";
+			return candidate;
+		} catch {
+			try { await candidate?.dispose(); } catch { /* proceed with original runtime */ }
+			console.warn("[WebScore] JSPI unavailable; using the standard WebGPU runtime");
+		}
+	}
 	// Keep the runtime and artifact paired. Never try to run the FP16 graph on WASM.
 	importScripts(`${ORT_BASE}${provider === "webgpu" ? "ort.webgpu.min.js" : "ort.min.js"}`);
 	const runtime = globalThis.ort;
@@ -58,10 +85,8 @@ async function createForRuntime(VersionedWebScoreClient, provider, adapter) {
 	if (provider === "webgpu") {
 		// The B4+K4 path was validated on this architecture, and the client
 		// additionally requires the exact graph and pitch-tie mode.
-		const wide = adapter?.info?.architecture === "rdna-3";
 		try {
-			return await create({ gpuKvCache: true, cacheEmbeddings: true, gpuTokenSelection: true,
-				gpuBatchPairs: wide, gpuBatchWidth: wide ? 4 : 2, gpuFeedbackBlock: wide ? 4 : 0 });
+			return await create(options);
 		} catch {
 			console.warn("[WebScore] GPU token selection unavailable; trying standard selection");
 		}
@@ -88,8 +113,14 @@ function loadModel() {
 				fallbackReason = "WebGPU FP16 initialization failed";
 				model = await createForRuntime(VersionedWebScoreClient, "webgpu", adapter);
 				modelRuntime = { provider: "webgpu", precision: "fp16",
+					runtimeBridge: model.runtimeBridge ?? "asyncify",
+					nativeWebGpuDecoder: model.client?.decoderSession?.nativeWebGpuDecoder === true,
+					nativeSubgroupSize: model.client?.decoderSession?.nativeSubgroupSize ?? null,
 					gpuKvCache: model.client?.gpuKvCache === true,
 					gpuTokenSelection: Boolean(model.client?.tokenSelector),
+					gpuKvLayout: model.client?.localLayerKv ? "per-layer-fp16" : "packed",
+					serialPreludeFeedbackBlock: model.client?.gpuSerialFeedbackBlock ?? 0,
+					localProjectionFusion: model.client?.localProjectionFusion === true,
 					gpuBatchWidth: model.client?.gpuBatchPairs ? model.client.gpuBatchWidth : 1 };
 				return;
 			}
@@ -103,7 +134,7 @@ function loadModel() {
 	return loadPromise;
 }
 
-async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness) {
+async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness = true) {
 	if (!model) {
 		throw new Error("모델이 아직 준비되지 않았습니다.");
 	}

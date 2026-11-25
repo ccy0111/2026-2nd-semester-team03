@@ -21,6 +21,7 @@ export async function runBatchPair(c, pcms, options={}) {
    return result;
   } catch(error) {
    options.signal?.throwIfAborted();
+   if (c.gpuBatchPairs === false || pcms.length > (c.decoderSession?.nativeMaxBatch ?? 4)) throw error;
    stats.failed++;
    stats.failureName=error?.name??"Error";
    stats.failureReason=String(error?.message??"GPU feedback failed").replace(/https?:[^ ]+/g,"[URL]").slice(0,250);
@@ -33,7 +34,8 @@ export async function runBatchPair(c, pcms, options={}) {
 async function runBatch(c, pcms, {allowedPrograms, maxGenLen=1024,selector=null,signal=null}={}, experiment) {
  const B=pcms.length;
  signal?.throwIfAborted();
- if(B<2||B>4)throw new Error("Invalid independent chunk batch size");
+ const maxB = c.decoderSession?.nativeMaxBatch ?? 4;
+ if(B<2||B>maxB)throw new Error("Invalid independent chunk batch size");
  const m=pcms.map(p=>c.mel.computeChunkLogMel(p));
  const mel=new Float32Array(m[0].data.length*B);
  for(let row=0;row<B;row++)mel.set(m[row].data,row*m[0].data.length);
@@ -58,6 +60,34 @@ async function runBatch(c, pcms, {allowedPrograms, maxGenLen=1024,selector=null,
  const allowed=allowedPrograms===undefined?null:new Set(allowedPrograms),masked=new Set(c.maskedIds);
  if(allowed)for(const {id,kind,value} of c.lookup.idToEvent){
    if((kind==="inst"&&(value>=128||!allowed.has(value)))||(kind==="drum"&&!allowed.has(128)))masked.add(id);
+ }
+ if (typeof c.decoderSession?.generateBlockNative === "function" && c.embeddingTable) {
+  try {
+   const nativeRes = await c.decoderSession.generateBlockNative({
+    prefillData: prep,
+    batchSize: B,
+    prefillLen: P,
+    maxGenLen,
+    maskedIds: masked,
+    eosId: c.lookup.eosId,
+    vocabSize: V,
+    embeddingTable: c.embeddingTable,
+    blockSize: 64,
+    signal,
+    stats: experiment?.stats ?? null,
+   });
+   return { tokens: nativeRes.tokens, eos: nativeRes.done, decoderCalls: nativeRes.decoderCalls };
+  } catch (error) {
+   signal?.throwIfAborted();
+   if (typeof c._fallbackFromNativeDecoder === "function" && await c._fallbackFromNativeDecoder(signal)) {
+    const safeWidth = c.gpuKvBindingBytes > 0
+     ? boundedGpuBatchWidth(c.gpuBatchWidth ?? 4, B, maxGenLen, c.gpuKvBindingBytes)
+     : 4;
+    if (c.gpuBatchPairs === false || B > safeWidth) throw error;
+   } else {
+    throw error;
+   }
+  }
  }
  const offsets=[];
  if(selector)selector.setMask(masked);

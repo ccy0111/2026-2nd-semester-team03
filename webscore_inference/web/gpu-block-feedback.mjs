@@ -62,7 +62,7 @@ async function pipelineFor(device) {
 
 export class GpuBlockFeedback {
  static async create(c,b,d,masked,k){
-  if(![1,2,4,8].includes(k)||b<2||b>4)throw new Error("Unsupported GPU feedback size");
+  if(![1,2,4,8].includes(k)||b<1||b>4)throw new Error("Unsupported GPU feedback size");
   if(typeof c.ort.Tensor.fromGpuBuffer!=="function")throw new Error("ORT external GPU tensors unavailable");
   const device=await c.ort.env.webgpu.device, pipe=await pipelineFor(device);
   const v=c.lookup.idToEvent.length;

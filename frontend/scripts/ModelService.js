@@ -66,7 +66,7 @@ export class ModelService {
 	}
 
 	// MP3 File → { notes, chunkStatuses }
-	async transcribe(file, onProgress, { boundaryMode, allowedPrograms, normalizeLoudness = false } = {}) {
+	async transcribe(file, onProgress, { boundaryMode, allowedPrograms, normalizeLoudness = true } = {}) {
 		if (!this.isReady) {
 			throw new Error("모델이 아직 준비되지 않았습니다.");
 		}
