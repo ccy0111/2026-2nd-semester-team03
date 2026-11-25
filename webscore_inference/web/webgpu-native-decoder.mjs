@@ -386,7 +386,7 @@ enable f16;
 struct Params { B: u32, S: u32, posOffset: u32, pad: u32 }
 @group(0) @binding(0) var<storage, read> embeds: array<f32>;
 @group(0) @binding(1) var<storage, read> divTerm: array<f16>;
-@group(0) @binding(2) var<storage, read_write> out: array<f16>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
 @group(0) @binding(3) var<uniform> cfg: Params;
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
@@ -394,13 +394,13 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let b = gid.y;
   if (s >= cfg.S || b >= cfg.B) { return; }
   let tok = b * cfg.S + s;
-  let pos_h = f16(cfg.posOffset + s);
+  let pos_f = f32(cfg.posOffset + s);
   let base = tok * 1024u;
   for (var k = 0u; k < 2u; k++) {
     let j = tid + k * 256u;
-    let ang = pos_h / divTerm[j];
-    out[base + j] = f16(embeds[base + j]) + cos(ang);
-    out[base + 512u + j] = f16(embeds[base + 512u + j]) + sin(ang);
+    let ang = pos_f / f32(divTerm[j]);
+    out[base + j] = embeds[base + j] + cos(ang);
+    out[base + 512u + j] = embeds[base + 512u + j] + sin(ang);
   }
 }
 `;
@@ -413,9 +413,9 @@ function makeLayerNormPrefillWgsl(useSubgroups) {
 enable f16;
 enable subgroups;
 struct Params { M: u32, pad0: u32, pad1: u32, pad2: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<vec4<f32>>;
 @group(0) @binding(3) var<uniform> cfg: Params;
 var<workgroup> smemMean: array<f32, 32>;
 var<workgroup> smemSq: array<f32, 32>;
@@ -428,7 +428,7 @@ fn main(
 ) {
   let row = gid.x;
   if (row >= cfg.M) { return; }
-  let v = vec4<f32>(xIn[row * 256u + tid]);
+  let v = xIn[row * 256u + tid];
   let sg_sum = subgroupAdd(v.x + v.y + v.z + v.w);
   let num_sg = 256u / sg_size;
   let sg_idx = tid / sg_size;
@@ -444,16 +444,16 @@ fn main(
   var total_sq = 0.0;
   for (var i = 0u; i < num_sg; i++) { total_sq += smemSq[i]; }
   let inv_std = inverseSqrt(total_sq * (1.0 / 1024.0) + 1e-5);
-  yOut[row * 256u + tid] = vec4<f16>(d * inv_std * vec4<f32>(wb[tid]) + vec4<f32>(wb[256u + tid]));
+  yOut[row * 256u + tid] = d * inv_std * vec4<f32>(wb[tid]) + vec4<f32>(wb[256u + tid]);
 }
 `;
   }
   return `
 enable f16;
 struct Params { M: u32, pad0: u32, pad1: u32, pad2: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<vec4<f32>>;
 @group(0) @binding(3) var<uniform> cfg: Params;
 var<workgroup> smemMean: array<f32, 256>;
 var<workgroup> smemSq: array<f32, 256>;
@@ -461,7 +461,7 @@ var<workgroup> smemSq: array<f32, 256>;
 fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
   let row = gid.x;
   if (row >= cfg.M) { return; }
-  let v = vec4<f32>(xIn[row * 256u + tid]);
+  let v = xIn[row * 256u + tid];
   smemMean[tid] = v.x + v.y + v.z + v.w;
   workgroupBarrier();
   for (var hop = 128u; hop > 0u; hop >>= 1u) {
@@ -477,7 +477,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     workgroupBarrier();
   }
   let inv_std = inverseSqrt(smemSq[0] * (1.0 / 1024.0) + 1e-5);
-  yOut[row * 256u + tid] = vec4<f16>(d * inv_std * vec4<f32>(wb[tid]) + vec4<f32>(wb[256u + tid]));
+  yOut[row * 256u + tid] = d * inv_std * vec4<f32>(wb[tid]) + vec4<f32>(wb[256u + tid]);
 }
 `;
 }
@@ -510,7 +510,7 @@ function makeDecodeGemvShaders(sgSize) {
     var s = 0.0;
     var xv: array<vec4<f32>, ${VECS}>;
     for (var i = 0u; i < ${VECS}u; i++) {
-      let v = vec4<f32>(xIn[xb + kx + i * ${LANE}u]);
+      let v = xIn[xb + kx + i * ${LANE}u];
       xv[i] = v;
       s += (v.x + v.y + v.z + v.w);
     }
@@ -530,10 +530,10 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(4) var<storage, read> state: StepState;
 @group(0) @binding(5) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -555,30 +555,30 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let m12 = vec4<f32>(wMat[wb1 + kx + 128u]);let m13 = vec4<f32>(wMat[wb1 + kx + 192u]);
   for (var bi = 0u; bi < B; bi++) {
     let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
     let s = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
     let mean = subgroupAdd(s) * (1.0 / 1024.0);
     let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
     let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
     let inv = inverseSqrt(subgroupAdd(dot(d0,d0)+dot(d1,d1)+dot(d2,d2)+dot(d3,d3)) * (1.0 / 1024.0) + 1e-5);
-    let n0 = vec4<f32>(vec4<f16>(d0 * inv * w0 + b0));
-    let n1 = vec4<f32>(vec4<f16>(d1 * inv * w1 + b1));
-    let n2 = vec4<f32>(vec4<f16>(d2 * inv * w2 + b2));
-    let n3 = vec4<f32>(vec4<f16>(d3 * inv * w3 + b3));
+    let n0 = d0 * inv * w0 + b0;
+    let n1 = d1 * inv * w1 + b1;
+    let n2 = d2 * inv * w2 + b2;
+    let n3 = d3 * inv * w3 + b3;
     let a0 = subgroupAdd(dot(n0, m00) + dot(n1, m01) + dot(n2, m02) + dot(n3, m03));
     let a1 = subgroupAdd(dot(n0, m10) + dot(n1, m11) + dot(n2, m12) + dot(n3, m13));
-    if (kx == 0u) { yOut[bi * N + r0] = f16(a0); yOut[bi * N + r1] = f16(a1); }
+    if (kx == 0u) { yOut[bi * N + r0] = a0; yOut[bi * N + r1] = a1; }
   }
 }` : `
 enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(4) var<storage, read> state: StepState;
 @group(0) @binding(5) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -609,7 +609,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     if (r0 < N) {
       for (var i = 0u; i < ${VECS}u; i++) {
         let k = kx + i * ${LANE}u;
-        let nv = vec4<f32>(vec4<f16>(xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k])));
+        let nv = xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k]);
         a0 += dot(nv, vec4<f32>(m0[i]));
         if (r1 < N) { a1 += dot(nv, vec4<f32>(m1[i])); }
       }
@@ -617,8 +617,8 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     a0 = subgroupAdd(a0);
     a1 = subgroupAdd(a1);
     if (kx == 0u) {
-      if (r0 < N) { yOut[bi * N + r0] = f16(a0); }
-      if (r1 < N) { yOut[bi * N + r1] = f16(a1); }
+      if (r0 < N) { yOut[bi * N + r0] = a0; }
+      if (r1 < N) { yOut[bi * N + r1] = a1; }
     }
   }
 }`;
@@ -628,10 +628,10 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(4) var<storage, read> state: StepState;
 @group(0) @binding(5) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -652,30 +652,30 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let u2 = vec4<f32>(wMat[ub + kx + 128u]);let u3 = vec4<f32>(wMat[ub + kx + 192u]);
   for (var bi = 0u; bi < B; bi++) {
     let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
     let s = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
     let mean = subgroupAdd(s) * (1.0 / 1024.0);
     let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
     let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
     let inv = inverseSqrt(subgroupAdd(dot(d0,d0)+dot(d1,d1)+dot(d2,d2)+dot(d3,d3)) * (1.0 / 1024.0) + 1e-5);
-    let n0 = vec4<f32>(vec4<f16>(d0 * inv * w0 + b0));
-    let n1 = vec4<f32>(vec4<f16>(d1 * inv * w1 + b1));
-    let n2 = vec4<f32>(vec4<f16>(d2 * inv * w2 + b2));
-    let n3 = vec4<f32>(vec4<f16>(d3 * inv * w3 + b3));
+    let n0 = d0 * inv * w0 + b0;
+    let n1 = d1 * inv * w1 + b1;
+    let n2 = d2 * inv * w2 + b2;
+    let n3 = d3 * inv * w3 + b3;
     let gs = subgroupAdd(dot(n0, g0) + dot(n1, g1) + dot(n2, g2) + dot(n3, g3));
     let us = subgroupAdd(dot(n0, u0) + dot(n1, u1) + dot(n2, u2) + dot(n3, u3));
-    if (kx == 0u) { yOut[bi * N + row] = f16((gs / (1.0 + exp(-gs))) * us); }
+    if (kx == 0u) { yOut[bi * N + row] = (gs / (1.0 + exp(-gs))) * us; }
   }
 }` : `
 enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(4) var<storage, read> state: StepState;
 @group(0) @binding(5) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -705,7 +705,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     if (row < N) {
       for (var i = 0u; i < ${VECS}u; i++) {
         let k = kx + i * ${LANE}u;
-        let nv = vec4<f32>(vec4<f16>(xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k])));
+        let nv = xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k]);
         gs += dot(nv, vec4<f32>(gw[i]));
         us += dot(nv, vec4<f32>(uw[i]));
       }
@@ -713,7 +713,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     gs = subgroupAdd(gs);
     us = subgroupAdd(us);
     if (kx == 0u && row < N) {
-      yOut[bi * N + row] = f16((gs / (1.0 + exp(-gs))) * us);
+      yOut[bi * N + row] = (gs / (1.0 + exp(-gs))) * us;
     }
   }
 }`;
@@ -723,7 +723,7 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, NPad: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
 @group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
@@ -747,23 +747,23 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let m12 = vec4<f32>(wMat[wb1 + kx + 128u]);let m13 = vec4<f32>(wMat[wb1 + kx + 192u]);
   for (var bi = 0u; bi < B; bi++) {
     let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
     let s = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
     let mean = subgroupAdd(s) * (1.0 / 1024.0);
     let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
     let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
     let inv = inverseSqrt(subgroupAdd(dot(d0,d0)+dot(d1,d1)+dot(d2,d2)+dot(d3,d3)) * (1.0 / 1024.0) + 1e-5);
-    let n0 = vec4<f32>(vec4<f16>(d0 * inv * w0 + b0));
-    let n1 = vec4<f32>(vec4<f16>(d1 * inv * w1 + b1));
-    let n2 = vec4<f32>(vec4<f16>(d2 * inv * w2 + b2));
-    let n3 = vec4<f32>(vec4<f16>(d3 * inv * w3 + b3));
+    let n0 = d0 * inv * w0 + b0;
+    let n1 = d1 * inv * w1 + b1;
+    let n2 = d2 * inv * w2 + b2;
+    let n3 = d3 * inv * w3 + b3;
     let a0 = subgroupAdd(dot(n0, m00) + dot(n1, m01) + dot(n2, m02) + dot(n3, m03));
     let a1 = subgroupAdd(dot(n0, m10) + dot(n1, m11) + dot(n2, m12) + dot(n3, m13));
     if (kx == 0u) {
       let off = bi * cfg.NPad;
-      if (r0 < cfg.N) { yOut[off + r0] = f32(f16(a0)); }
-      if (r1 < cfg.N) { yOut[off + r1] = f32(f16(a1)); }
+      if (r0 < cfg.N) { yOut[off + r0] = a0; }
+      if (r1 < cfg.N) { yOut[off + r1] = a1; }
     }
   }
 }` : `
@@ -771,7 +771,7 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, NPad: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
 @group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
@@ -805,7 +805,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     if (r0 < N) {
       for (var i = 0u; i < ${VECS}u; i++) {
         let k = kx + i * ${LANE}u;
-        let nv = vec4<f32>(vec4<f16>(xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k])));
+        let nv = xv[i] * inv * vec4<f32>(wb[k]) + vec4<f32>(wb[256u + k]);
         a0 += dot(nv, vec4<f32>(m0[i]));
         if (r1 < N) { a1 += dot(nv, vec4<f32>(m1[i])); }
       }
@@ -814,8 +814,8 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     a1 = subgroupAdd(a1);
     if (kx == 0u) {
       let off = bi * cfg.NPad;
-      if (r0 < N) { yOut[off + r0] = f32(f16(a0)); }
-      if (r1 < N) { yOut[off + r1] = f32(f16(a1)); }
+      if (r0 < N) { yOut[off + r0] = a0; }
+      if (r1 < N) { yOut[off + r1] = a1; }
     }
   }
 }`;
@@ -826,9 +826,9 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, K4: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(3) var<storage, read> state: StepState;
 @group(0) @binding(4) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -847,7 +847,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   var a0 = 0.0; var a1 = 0.0;
   if (r0 < N) {
     for (var k = kx; k < K4; k += ${LANE}u) {
-      let xv = vec4<f32>(xIn[k]);
+      let xv = xIn[k];
       a0 += dot(xv, vec4<f32>(wMat[wb0 + k]));
       if (r1 < N) { a1 += dot(xv, vec4<f32>(wMat[wb1 + k])); }
     }
@@ -855,8 +855,8 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   a0 = subgroupAdd(a0);
   a1 = subgroupAdd(a1);
   if (kx == 0u) {
-    if (r0 < N) { yOut[r0] = yOut[r0] + f16(a0); }
-    if (r1 < N) { yOut[r1] = yOut[r1] + f16(a1); }
+    if (r0 < N) { yOut[r0] = yOut[r0] + a0; }
+    if (r1 < N) { yOut[r1] = yOut[r1] + a1; }
   }
 }`;
 
@@ -866,9 +866,9 @@ enable f16;
 enable subgroups;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, K4: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(3) var<storage, read> state: StepState;
 @group(0) @binding(4) var<uniform> cfg: Params;
 var<workgroup> wgDone: u32;
@@ -893,7 +893,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
       let w0 = vec4<f32>(wMat[wb0 + k]);
       let w1 = select(vec4<f32>(0.0), vec4<f32>(wMat[wb1 + k]), r1 < N);
       for (var bi = 0u; bi < B; bi++) {
-        let xv = vec4<f32>(xIn[bi * K4 + k]);
+        let xv = xIn[bi * K4 + k];
         a0[bi] += dot(xv, w0);
         a1[bi] += dot(xv, w1);
       }
@@ -903,8 +903,8 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     let s0 = subgroupAdd(a0[bi]);
     let s1 = subgroupAdd(a1[bi]);
     if (kx == 0u) {
-      if (r0 < N) { yOut[bi * N + r0] = yOut[bi * N + r0] + f16(s0); }
-      if (r1 < N) { yOut[bi * N + r1] = yOut[bi * N + r1] + f16(s1); }
+      if (r0 < N) { yOut[bi * N + r0] = yOut[bi * N + r0] + s0; }
+      if (r1 < N) { yOut[bi * N + r1] = yOut[bi * N + r1] + s1; }
     }
   }
 }`;
@@ -926,119 +926,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
 enable f16;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
-@group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
-@group(0) @binding(4) var<storage, read> state: StepState;
-@group(0) @binding(5) var<uniform> cfg: Params;
-var<workgroup> smem: array<f32, 256>;
-var<workgroup> wgDone: u32;
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
-  if (tid == 0u) { wgDone = state.allDone; }
-  if (workgroupUniformLoad(&wgDone) != 0u) { return; }
-  let kx = tid & 63u;
-  let ry = tid >> 6u;
-  let row = gid.x * 4u + ry;
-  let B = cfg.B; let N = cfg.N;
-  let wBase = row * 256u;
-  for (var bi = 0u; bi < B; bi++) {
-    let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
-    smem[tid] = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
-    ${reduce64("smem")}
-    let mean = smem[ry * 64u] * (1.0 / 1024.0);
-    workgroupBarrier();
-    let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
-    let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
-    smem[tid] = dot(d0,d0) + dot(d1,d1) + dot(d2,d2) + dot(d3,d3);
-    ${reduce64("smem")}
-    let inv = inverseSqrt(smem[ry * 64u] * (1.0 / 1024.0) + 1e-5);
-    workgroupBarrier();
-    var acc = 0.0;
-    if (row < N) {
-      let n0 = vec4<f32>(vec4<f16>(d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx])));
-      let n1 = vec4<f32>(vec4<f16>(d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx])));
-      let n2 = vec4<f32>(vec4<f16>(d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx])));
-      let n3 = vec4<f32>(vec4<f16>(d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx])));
-      acc = dot(n0, vec4<f32>(wMat[wBase + kx])) + dot(n1, vec4<f32>(wMat[wBase + kx + 64u]))
-          + dot(n2, vec4<f32>(wMat[wBase + kx + 128u])) + dot(n3, vec4<f32>(wMat[wBase + kx + 192u]));
-    }
-    smem[tid] = acc;
-    ${reduce64("smem")}
-    if (kx == 0u && row < N) { yOut[bi * N + row] = f16(smem[ry * 64u]); }
-    workgroupBarrier();
-  }
-}`;
-
-  const gemvNormSwiGlu = `
-enable f16;
-${STEP_STATE_STRUCT}
-struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
-@group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> yOut: array<f16>;
-@group(0) @binding(4) var<storage, read> state: StepState;
-@group(0) @binding(5) var<uniform> cfg: Params;
-var<workgroup> smemG: array<f32, 256>;
-var<workgroup> smemU: array<f32, 256>;
-var<workgroup> wgDone: u32;
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
-  if (tid == 0u) { wgDone = state.allDone; }
-  if (workgroupUniformLoad(&wgDone) != 0u) { return; }
-  let kx = tid & 63u;
-  let ry = tid >> 6u;
-  let row = gid.x * 4u + ry;
-  let B = cfg.B; let N = cfg.N;
-  let gb = row * 256u; let ub = (row + N) * 256u;
-  for (var bi = 0u; bi < B; bi++) {
-    let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
-    smemG[tid] = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
-    ${reduce64("smemG")}
-    let mean = smemG[ry * 64u] * (1.0 / 1024.0);
-    workgroupBarrier();
-    let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
-    let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
-    smemG[tid] = dot(d0,d0) + dot(d1,d1) + dot(d2,d2) + dot(d3,d3);
-    ${reduce64("smemG")}
-    let inv = inverseSqrt(smemG[ry * 64u] * (1.0 / 1024.0) + 1e-5);
-    workgroupBarrier();
-    var gAcc = 0.0; var uAcc = 0.0;
-    if (row < N) {
-      let n0 = vec4<f32>(vec4<f16>(d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx])));
-      let n1 = vec4<f32>(vec4<f16>(d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx])));
-      let n2 = vec4<f32>(vec4<f16>(d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx])));
-      let n3 = vec4<f32>(vec4<f16>(d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx])));
-      gAcc = dot(n0, vec4<f32>(wMat[gb + kx])) + dot(n1, vec4<f32>(wMat[gb + kx + 64u]))
-           + dot(n2, vec4<f32>(wMat[gb + kx + 128u])) + dot(n3, vec4<f32>(wMat[gb + kx + 192u]));
-      uAcc = dot(n0, vec4<f32>(wMat[ub + kx])) + dot(n1, vec4<f32>(wMat[ub + kx + 64u]))
-           + dot(n2, vec4<f32>(wMat[ub + kx + 128u])) + dot(n3, vec4<f32>(wMat[ub + kx + 192u]));
-    }
-    smemG[tid] = gAcc; smemU[tid] = uAcc;
-    workgroupBarrier();
-    for (var hop = 32u; hop > 0u; hop >>= 1u) {
-      if (kx < hop) { smemG[tid] += smemG[tid + hop]; smemU[tid] += smemU[tid + hop]; }
-      workgroupBarrier();
-    }
-    if (kx == 0u && row < N) {
-      let gs = smemG[ry * 64u]; let us = smemU[ry * 64u];
-      yOut[bi * N + row] = f16((gs / (1.0 + exp(-gs))) * us);
-    }
-    workgroupBarrier();
-  }
-}`;
-
-  const gemvNormLm = `
-enable f16;
-${STEP_STATE_STRUCT}
-struct Params { B: u32, N: u32, NPad: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
 @group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
@@ -1057,8 +945,8 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let wBase = row * 256u;
   for (var bi = 0u; bi < B; bi++) {
     let xb = bi * 256u;
-    let v0 = vec4<f32>(xIn[xb + kx]);       let v1 = vec4<f32>(xIn[xb + kx + 64u]);
-    let v2 = vec4<f32>(xIn[xb + kx + 128u]);let v3 = vec4<f32>(xIn[xb + kx + 192u]);
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
     smem[tid] = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
     ${reduce64("smem")}
     let mean = smem[ry * 64u] * (1.0 / 1024.0);
@@ -1071,16 +959,128 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     workgroupBarrier();
     var acc = 0.0;
     if (row < N) {
-      let n0 = vec4<f32>(vec4<f16>(d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx])));
-      let n1 = vec4<f32>(vec4<f16>(d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx])));
-      let n2 = vec4<f32>(vec4<f16>(d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx])));
-      let n3 = vec4<f32>(vec4<f16>(d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx])));
+      let n0 = d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx]);
+      let n1 = d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx]);
+      let n2 = d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx]);
+      let n3 = d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx]);
       acc = dot(n0, vec4<f32>(wMat[wBase + kx])) + dot(n1, vec4<f32>(wMat[wBase + kx + 64u]))
           + dot(n2, vec4<f32>(wMat[wBase + kx + 128u])) + dot(n3, vec4<f32>(wMat[wBase + kx + 192u]));
     }
     smem[tid] = acc;
     ${reduce64("smem")}
-    if (kx == 0u && row < N) { yOut[bi * cfg.NPad + row] = f32(f16(smem[ry * 64u])); }
+    if (kx == 0u && row < N) { yOut[bi * N + row] = smem[ry * 64u]; }
+    workgroupBarrier();
+  }
+}`;
+
+  const gemvNormSwiGlu = `
+enable f16;
+${STEP_STATE_STRUCT}
+struct Params { B: u32, N: u32, pad0: u32, pad1: u32 }
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
+@group(0) @binding(4) var<storage, read> state: StepState;
+@group(0) @binding(5) var<uniform> cfg: Params;
+var<workgroup> smemG: array<f32, 256>;
+var<workgroup> smemU: array<f32, 256>;
+var<workgroup> wgDone: u32;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
+  if (tid == 0u) { wgDone = state.allDone; }
+  if (workgroupUniformLoad(&wgDone) != 0u) { return; }
+  let kx = tid & 63u;
+  let ry = tid >> 6u;
+  let row = gid.x * 4u + ry;
+  let B = cfg.B; let N = cfg.N;
+  let gb = row * 256u; let ub = (row + N) * 256u;
+  for (var bi = 0u; bi < B; bi++) {
+    let xb = bi * 256u;
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
+    smemG[tid] = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
+    ${reduce64("smemG")}
+    let mean = smemG[ry * 64u] * (1.0 / 1024.0);
+    workgroupBarrier();
+    let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
+    let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
+    smemG[tid] = dot(d0,d0) + dot(d1,d1) + dot(d2,d2) + dot(d3,d3);
+    ${reduce64("smemG")}
+    let inv = inverseSqrt(smemG[ry * 64u] * (1.0 / 1024.0) + 1e-5);
+    workgroupBarrier();
+    var gAcc = 0.0; var uAcc = 0.0;
+    if (row < N) {
+      let n0 = d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx]);
+      let n1 = d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx]);
+      let n2 = d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx]);
+      let n3 = d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx]);
+      gAcc = dot(n0, vec4<f32>(wMat[gb + kx])) + dot(n1, vec4<f32>(wMat[gb + kx + 64u]))
+           + dot(n2, vec4<f32>(wMat[gb + kx + 128u])) + dot(n3, vec4<f32>(wMat[gb + kx + 192u]));
+      uAcc = dot(n0, vec4<f32>(wMat[ub + kx])) + dot(n1, vec4<f32>(wMat[ub + kx + 64u]))
+           + dot(n2, vec4<f32>(wMat[ub + kx + 128u])) + dot(n3, vec4<f32>(wMat[ub + kx + 192u]));
+    }
+    smemG[tid] = gAcc; smemU[tid] = uAcc;
+    workgroupBarrier();
+    for (var hop = 32u; hop > 0u; hop >>= 1u) {
+      if (kx < hop) { smemG[tid] += smemG[tid + hop]; smemU[tid] += smemU[tid + hop]; }
+      workgroupBarrier();
+    }
+    if (kx == 0u && row < N) {
+      let gs = smemG[ry * 64u]; let us = smemU[ry * 64u];
+      yOut[bi * N + row] = (gs / (1.0 + exp(-gs))) * us;
+    }
+    workgroupBarrier();
+  }
+}`;
+
+  const gemvNormLm = `
+enable f16;
+${STEP_STATE_STRUCT}
+struct Params { B: u32, N: u32, NPad: u32, pad: u32 }
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> wb: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read> wMat: array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read_write> yOut: array<f32>;
+@group(0) @binding(4) var<storage, read> state: StepState;
+@group(0) @binding(5) var<uniform> cfg: Params;
+var<workgroup> smem: array<f32, 256>;
+var<workgroup> wgDone: u32;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
+  if (tid == 0u) { wgDone = state.allDone; }
+  if (workgroupUniformLoad(&wgDone) != 0u) { return; }
+  let kx = tid & 63u;
+  let ry = tid >> 6u;
+  let row = gid.x * 4u + ry;
+  let B = cfg.B; let N = cfg.N;
+  let wBase = row * 256u;
+  for (var bi = 0u; bi < B; bi++) {
+    let xb = bi * 256u;
+    let v0 = xIn[xb + kx];       let v1 = xIn[xb + kx + 64u];
+    let v2 = xIn[xb + kx + 128u];let v3 = xIn[xb + kx + 192u];
+    smem[tid] = (v0.x+v0.y+v0.z+v0.w)+(v1.x+v1.y+v1.z+v1.w)+(v2.x+v2.y+v2.z+v2.w)+(v3.x+v3.y+v3.z+v3.w);
+    ${reduce64("smem")}
+    let mean = smem[ry * 64u] * (1.0 / 1024.0);
+    workgroupBarrier();
+    let d0 = v0 - vec4<f32>(mean); let d1 = v1 - vec4<f32>(mean);
+    let d2 = v2 - vec4<f32>(mean); let d3 = v3 - vec4<f32>(mean);
+    smem[tid] = dot(d0,d0) + dot(d1,d1) + dot(d2,d2) + dot(d3,d3);
+    ${reduce64("smem")}
+    let inv = inverseSqrt(smem[ry * 64u] * (1.0 / 1024.0) + 1e-5);
+    workgroupBarrier();
+    var acc = 0.0;
+    if (row < N) {
+      let n0 = d0 * inv * vec4<f32>(wb[kx]) + vec4<f32>(wb[256u + kx]);
+      let n1 = d1 * inv * vec4<f32>(wb[kx + 64u]) + vec4<f32>(wb[320u + kx]);
+      let n2 = d2 * inv * vec4<f32>(wb[kx + 128u]) + vec4<f32>(wb[384u + kx]);
+      let n3 = d3 * inv * vec4<f32>(wb[kx + 192u]) + vec4<f32>(wb[448u + kx]);
+      acc = dot(n0, vec4<f32>(wMat[wBase + kx])) + dot(n1, vec4<f32>(wMat[wBase + kx + 64u]))
+          + dot(n2, vec4<f32>(wMat[wBase + kx + 128u])) + dot(n3, vec4<f32>(wMat[wBase + kx + 192u]));
+    }
+    smem[tid] = acc;
+    ${reduce64("smem")}
+    if (kx == 0u && row < N) { yOut[bi * cfg.NPad + row] = smem[ry * 64u]; }
     workgroupBarrier();
   }
 }`;
@@ -1089,9 +1089,9 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
 enable f16;
 ${STEP_STATE_STRUCT}
 struct Params { B: u32, N: u32, K4: u32, pad: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(3) var<storage, read> state: StepState;
 @group(0) @binding(4) var<uniform> cfg: Params;
 var<workgroup> smem: array<f32, 256>;
@@ -1109,12 +1109,12 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
     var acc = 0.0;
     if (row < N) {
       for (var k = kx; k < K4; k += 64u) {
-        acc += dot(vec4<f32>(xIn[bi * K4 + k]), vec4<f32>(wMat[wBase + k]));
+        acc += dot(xIn[bi * K4 + k], vec4<f32>(wMat[wBase + k]));
       }
     }
     smem[tid] = acc;
     ${reduce64("smem")}
-    if (kx == 0u && row < N) { yOut[bi * N + row] = yOut[bi * N + row] + f16(smem[ry * 64u]); }
+    if (kx == 0u && row < N) { yOut[bi * N + row] = yOut[bi * N + row] + smem[ry * 64u]; }
     workgroupBarrier();
   }
 }`;
@@ -1164,14 +1164,14 @@ enable f16;
 ${sgDecl}
 ${STEP_STATE_STRUCT}
 struct Params { layer: u32, B: u32, maxB: u32, maxSeq: u32 }
-@group(0) @binding(0) var<storage, read> qkv: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> qkv: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> qkMeta: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read_write> kCache: array<vec4<f16>>;
 @group(0) @binding(3) var<storage, read_write> vCache: array<vec4<f16>>;
 @group(0) @binding(4) var<storage, read_write> partialOut: array<f32>;
 @group(0) @binding(5) var<storage, read> state: StepState;
 @group(0) @binding(6) var<uniform> cfg: Params;
-var<workgroup> qkPartial: array<vec4<f16>, 32>;
+var<workgroup> qkPartial: array<vec4<f32>, 32>;
 var<workgroup> qSmem: array<vec4<f32>, 16>;
 var<workgroup> kCurSmem: array<vec4<f32>, 16>;
 var<workgroup> vCurSmem: array<vec4<f32>, 16>;
@@ -1209,8 +1209,8 @@ fn main(
   let hasCur = (curPos >= spStart && curPos < spEnd);
   let kvBase = ((cfg.layer * cfg.maxB + b) * 4u + kvHead) * cfg.maxSeq * 16u;
 
-  // Step 0: ExactF16RMS for Q (tid 0..15) and K (tid 16..31 if hasCur)
-  var xVal = vec4<f16>(0.0);
+  // Step 0: FP32 RMSNorm for Q (tid 0..15) and K (tid 16..31 if hasCur)
+  var xVal = vec4<f32>(0.0);
   if (tid < 16u) {
     xVal = qkv[b * 384u + qHead * 16u + tid];
     qkPartial[tid] = xVal * xVal;
@@ -1228,25 +1228,25 @@ fn main(
   }
   if (tid == 0u || (hasCur && tid == 16u)) {
     let v = qkPartial[tid];
-    let meanSq = ((v.x + v.z) + (v.y + v.w)) / f16(64.0);
-    qkPartial[tid] = vec4<f16>(f16(1.0) / sqrt(meanSq + bitcast<vec2<f16>>(17u).x));
+    let meanSq = (v.x + v.y + v.z + v.w) * (1.0 / 64.0);
+    qkPartial[tid] = vec4<f32>(inverseSqrt(meanSq + 1e-6));
   }
   workgroupBarrier();
 
   if (tid < 16u) {
-    let scVec = qkMeta[32u + (qHead >> 2u)];
+    let scVec = vec4<f32>(qkMeta[32u + (qHead >> 2u)]);
     let sc = scVec[qHead & 3u];
-    qSmem[tid] = vec4<f32>((xVal * vec4<f16>(qkPartial[0].x)) * qkMeta[tid] * vec4<f16>(sc));
+    qSmem[tid] = (xVal * qkPartial[0].x) * vec4<f32>(qkMeta[tid]) * sc;
   } else if (hasCur && tid < 32u) {
     let d = tid - 16u;
-    let kNorm = (xVal * vec4<f16>(qkPartial[16].x)) * qkMeta[16u + d];
+    let kNorm = (xVal * qkPartial[16].x) * vec4<f32>(qkMeta[16u + d]);
     let vRaw = qkv[b * 384u + 320u + kvHead * 16u + d];
-    kCurSmem[d] = vec4<f32>(kNorm);
-    vCurSmem[d] = vec4<f32>(vRaw);
+    kCurSmem[d] = kNorm;
+    vCurSmem[d] = vRaw;
     if ((qHead & 3u) == 0u) {
       let kvIdx = kvBase + curPos * 16u + d;
-      kCache[kvIdx] = kNorm;
-      vCache[kvIdx] = vRaw;
+      kCache[kvIdx] = vec4<f16>(kNorm);
+      vCache[kvIdx] = vec4<f16>(vRaw);
     }
   }
   workgroupBarrier();
@@ -1310,7 +1310,7 @@ fn main(
 enable f16;
 ${STEP_STATE_STRUCT}
 @group(0) @binding(0) var<storage, read> partialIn: array<f32>;
-@group(0) @binding(1) var<storage, read_write> attnOut: array<f16>;
+@group(0) @binding(1) var<storage, read_write> attnOut: array<f32>;
 @group(0) @binding(2) var<storage, read> state: StepState;
 @compute @workgroup_size(64)
 fn main(@builtin(local_invocation_index) d: u32, @builtin(workgroup_id) gid: vec3<u32>) {
@@ -1338,7 +1338,7 @@ fn main(@builtin(local_invocation_index) d: u32, @builtin(workgroup_id) gid: vec
       den += w * lArr[sp];
     }
   }
-  attnOut[(b * 16u + qHead) * 64u + d] = f16(num / den);
+  attnOut[(b * 16u + qHead) * 64u + d] = num / den;
 }`;
 
   return { gqaAttnSplit, gqaAttnReduce };
@@ -1383,10 +1383,10 @@ function makePrefillAttnWgsl(useSubgroups) {
 enable f16;
 ${sgDecl}
 struct Params { layer: u32, B: u32, S: u32, maxB: u32, maxSeq: u32, posOffset: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> qIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> qIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> kCache: array<vec4<f16>>;
 @group(0) @binding(2) var<storage, read> vCache: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> attnOut: array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read_write> attnOut: array<vec4<f32>>;
 @group(0) @binding(4) var<uniform> cfg: Params;
 var<workgroup> qSmem: array<vec4<f32>, 16>;
 var<workgroup> scores: array<f32, 2048>;
@@ -1408,7 +1408,7 @@ fn main(
   let tLane = tid >> 4u;
 
   if (tid < 16u) {
-    qSmem[tid] = vec4<f32>(qIn[((b * 16u + qHead) * cfg.S + s) * 16u + tid]);
+    qSmem[tid] = qIn[((b * 16u + qHead) * cfg.S + s) * 16u + tid];
   }
   workgroupBarrier();
 
@@ -1444,7 +1444,7 @@ fn main(
     workgroupBarrier();
   }
   if (tLane == 0u) {
-    attnOut[((b * cfg.S + s) * 16u + qHead) * 16u + d4] = vec4<f16>(vAcc[d4] * invSum);
+    attnOut[((b * cfg.S + s) * 16u + qHead) * 16u + d4] = vAcc[d4] * invSum;
   }
 }
 `;
@@ -1453,14 +1453,14 @@ fn main(
 const QKNORM_KV_PREFILL_WGSL = `
 enable f16;
 struct Params { layer: u32, B: u32, S: u32, maxB: u32, maxSeq: u32, posOffset: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> qkv: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> qkv: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> qkMeta: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> qOut: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read_write> qOut: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> kCache: array<vec4<f16>>;
 @group(0) @binding(4) var<storage, read_write> vCache: array<vec4<f16>>;
 @group(0) @binding(5) var<uniform> cfg: Params;
-var<workgroup> partial: array<vec4<f16>, 256>;
-var<workgroup> scaleArr: array<f16, 16>;
+var<workgroup> partial: array<vec4<f32>, 256>;
+var<workgroup> scaleArr: array<f32, 16>;
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: vec3<u32>) {
   let s = gid.x;
@@ -1471,7 +1471,7 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   let h = tid >> 4u;
 
   if (tid < 4u) {
-    let sc = qkMeta[32u + tid];
+    let sc = vec4<f32>(qkMeta[32u + tid]);
     scaleArr[tid * 4u + 0u] = sc.x;
     scaleArr[tid * 4u + 1u] = sc.y;
     scaleArr[tid * 4u + 2u] = sc.z;
@@ -1487,15 +1487,15 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   }
   if (lane == 0u) {
     let v = partial[h * 16u];
-    let meanSq = ((v.x + v.z) + (v.y + v.w)) / f16(64.0);
-    partial[h * 16u] = vec4<f16>(f16(1.0) / sqrt(meanSq + bitcast<vec2<f16>>(17u).x));
+    let meanSq = (v.x + v.y + v.z + v.w) * (1.0 / 64.0);
+    partial[h * 16u] = vec4<f32>(inverseSqrt(meanSq + 1e-6));
   }
   workgroupBarrier();
   let qInvRms = partial[h * 16u].x;
-  qOut[((b * 16u + h) * cfg.S + s) * 16u + lane] = (xq * vec4<f16>(qInvRms)) * qkMeta[lane] * vec4<f16>(scaleArr[h]);
+  qOut[((b * 16u + h) * cfg.S + s) * 16u + lane] = (xq * qInvRms) * vec4<f32>(qkMeta[lane]) * scaleArr[h];
 
   workgroupBarrier();
-  var xk = vec4<f16>(0.0);
+  var xk = vec4<f32>(0.0);
   if (h < 4u) {
     xk = qkv[tok * 384u + 256u + h * 16u + lane];
     partial[tid] = xk * xk;
@@ -1507,29 +1507,29 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) gid: v
   }
   if (h < 4u && lane == 0u) {
     let v = partial[h * 16u];
-    let meanSq = ((v.x + v.z) + (v.y + v.w)) / f16(64.0);
-    partial[h * 16u] = vec4<f16>(f16(1.0) / sqrt(meanSq + bitcast<vec2<f16>>(17u).x));
+    let meanSq = (v.x + v.y + v.z + v.w) * (1.0 / 64.0);
+    partial[h * 16u] = vec4<f32>(inverseSqrt(meanSq + 1e-6));
   }
   workgroupBarrier();
   if (h < 4u) {
     let kInvRms = partial[h * 16u].x;
     let pos = cfg.posOffset + s;
     let kvIdx = (((cfg.layer * cfg.maxB + b) * 4u + h) * cfg.maxSeq + pos) * 16u + lane;
-    kCache[kvIdx] = (xk * vec4<f16>(kInvRms)) * qkMeta[16u + lane];
-    vCache[kvIdx] = qkv[tok * 384u + 320u + h * 16u + lane];
+    kCache[kvIdx] = vec4<f16>((xk * kInvRms) * vec4<f32>(qkMeta[16u + lane]));
+    vCache[kvIdx] = vec4<f16>(qkv[tok * 384u + 320u + h * 16u + lane]);
   }
 }
 `;
 
-// Universal High-Efficiency 32x32 Prefill GEMM (8x8 threads, 4x4/thread, 4KB LDS)
+// Universal High-Efficiency 32x32 Prefill GEMM (W16A32: FP32 activations, FP16 weights, 6KB LDS)
 const GEMM_PREFILL_WGSL = `
 enable f16;
 struct Params { M: u32, N: u32, K4: u32, mode: u32 }
-@group(0) @binding(0) var<storage, read> xIn: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> xIn: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> wMat: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<f16>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(3) var<uniform> cfg: Params;
-var<workgroup> As: array<f16, 1024>;
+var<workgroup> As: array<f32, 1024>;
 var<workgroup> Bs: array<f16, 1024>;
 @compute @workgroup_size(8, 8)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) gid: vec3<u32>) {
@@ -1555,7 +1555,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) gid
       let r = loadRow0 + rStep * 8u;
       let gm = m0 + r;
       let gn = n0 + r;
-      let av = select(vec4<f16>(0.0), xIn[gm * K4 + kk4 + loadCol], gm < M);
+      let av = select(vec4<f32>(0.0), xIn[gm * K4 + kk4 + loadCol], gm < M);
       let bv = select(vec4<f16>(0.0), wMat[gn * K4 + kk4 + loadCol], gn < N);
       let off = r * 32u + loadCol * 4u;
       As[off + 0u] = av.x; As[off + 1u] = av.y; As[off + 2u] = av.z; As[off + 3u] = av.w;
@@ -1566,10 +1566,10 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) gid
     let aRow = ty * 4u;
     let bRow = tx * 4u;
     for (var p = 0u; p < 32u; p++) {
-      let a0 = f32(As[(aRow + 0u) * 32u + p]);
-      let a1 = f32(As[(aRow + 1u) * 32u + p]);
-      let a2 = f32(As[(aRow + 2u) * 32u + p]);
-      let a3 = f32(As[(aRow + 3u) * 32u + p]);
+      let a0 = As[(aRow + 0u) * 32u + p];
+      let a1 = As[(aRow + 1u) * 32u + p];
+      let a2 = As[(aRow + 2u) * 32u + p];
+      let a3 = As[(aRow + 3u) * 32u + p];
       let bv = vec4<f32>(
         f32(Bs[(bRow + 0u) * 32u + p]),
         f32(Bs[(bRow + 1u) * 32u + p]),
@@ -1596,18 +1596,17 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) gid
       let gn = outN + j;
       if (gn >= N) { continue; }
       let idx = gm * N + gn;
-      if (cfg.mode == 1u) { yOut[idx] = yOut[idx] + f16(vals[j]); }
-      else { yOut[idx] = f16(vals[j]); }
+      if (cfg.mode == 1u) { yOut[idx] = yOut[idx] + vals[j]; }
+      else { yOut[idx] = vals[j]; }
     }
   }
 }
 `;
 
 const SWIGLU_PREFILL_WGSL = `
-enable f16;
 struct Params { M: u32, N: u32, pad0: u32, pad1: u32 }
-@group(0) @binding(0) var<storage, read> gateUp: array<f16>;
-@group(0) @binding(1) var<storage, read_write> out: array<f16>;
+@group(0) @binding(0) var<storage, read> gateUp: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
 @group(0) @binding(2) var<uniform> cfg: Params;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1616,9 +1615,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (idx >= total) { return; }
   let m = idx / cfg.N;
   let j = idx - m * cfg.N;
-  let g = f32(gateUp[m * (2u * cfg.N) + j]);
-  let u = f32(gateUp[m * (2u * cfg.N) + cfg.N + j]);
-  out[idx] = f16((g / (1.0 + exp(-g))) * u);
+  let g = gateUp[m * (2u * cfg.N) + j];
+  let u = gateUp[m * (2u * cfg.N) + cfg.N + j];
+  out[idx] = (g / (1.0 + exp(-g))) * u;
 }
 `;
 
@@ -1631,7 +1630,7 @@ struct Params { vocab: u32, stride: u32, B: u32, eos: u32 }
 @group(0) @binding(2) var<storage, read> lookup: array<f32>;
 @group(0) @binding(3) var<storage, read> divTerm: array<f16>;
 @group(0) @binding(4) var<storage, read_write> history: array<i32>;
-@group(0) @binding(5) var<storage, read_write> xDec: array<f16>;
+@group(0) @binding(5) var<storage, read_write> xDec: array<f32>;
 @group(0) @binding(6) var<storage, read_write> state: StepState;
 @group(0) @binding(7) var<uniform> cfg: Params;
 var<workgroup> scores: array<u32, 128>;
@@ -1647,7 +1646,7 @@ fn main(@builtin(local_invocation_index) lane: u32) {
   if (lane == 0u) { wgDone = state.allDone; }
   if (workgroupUniformLoad(&wgDone) != 0u) { return; }
   let slot = state.slot;
-  let nextPosH = f16(state.pos + 1u);
+  let nextPosF = f32(state.pos + 1u);
   var activeRows = 0u;
   for (var row = 0u; row < cfg.B; row++) {
     var best = 0u;
@@ -1688,9 +1687,9 @@ fn main(@builtin(local_invocation_index) lane: u32) {
     let lBase = feed * 1024u;
     for (var k = 0u; k < 4u; k++) {
       let j = lane + k * 128u;
-      let ang = nextPosH / divTerm[j];
-      xDec[xBase + j] = f16(lookup[lBase + j]) + cos(ang);
-      xDec[xBase + 512u + j] = f16(lookup[lBase + 512u + j]) + sin(ang);
+      let ang = nextPosF / f32(divTerm[j]);
+      xDec[xBase + j] = lookup[lBase + j] + cos(ang);
+      xDec[xBase + 512u + j] = lookup[lBase + 512u + j] + sin(ang);
     }
     workgroupBarrier();
   }
@@ -1924,12 +1923,12 @@ export class NativeWebGpuDecoder {
     this.kCache = this._buf(kvBytes, STORAGE, "k_cache");
     this.vCache = this._buf(kvBytes, STORAGE, "v_cache");
 
-    // Static decode activations + Split-K attention partial scratch
-    this.xDec = this._buf(maxB * DIM * 2, STORAGE | COPY_DST, "dec_x");
-    this.qkvDec = this._buf(maxB * QKV_DIM * 2, STORAGE, "dec_qkv");
+    // Static decode activations (full FP32 W16A32) + Split-K attention partial scratch
+    this.xDec = this._buf(maxB * DIM * 4, STORAGE | COPY_DST, "dec_x");
+    this.qkvDec = this._buf(maxB * QKV_DIM * 4, STORAGE, "dec_qkv");
     this.attnPartial = this._buf(maxB * Q_HEADS * ATTN_SPLITS * ATTN_PARTIAL_STRIDE * 4, STORAGE, "dec_attn_part");
-    this.attnDec = this._buf(maxB * DIM * 2, STORAGE, "dec_attn");
-    this.mlpMidDec = this._buf(maxB * FF_DIM * 2, STORAGE, "dec_mlp_mid");
+    this.attnDec = this._buf(maxB * DIM * 4, STORAGE, "dec_attn");
+    this.mlpMidDec = this._buf(maxB * FF_DIM * 4, STORAGE, "dec_mlp_mid");
     this.logitsBuf = this._buf(maxB * VOCAB_PAD * 4, STORAGE | COPY_SRC, "dec_logits");
 
     this.validBuf = this._buf(VOCAB * 4, STORAGE | COPY_DST, "valid_mask");
@@ -1976,13 +1975,13 @@ export class NativeWebGpuDecoder {
     const d = this.device;
     this.prefillBufs = {
       inF32: d.createBuffer({ size: cap * DIM * 4, usage: STORAGE | COPY_DST, label: "pre_in" }),
-      x: d.createBuffer({ size: cap * DIM * 2, usage: STORAGE | COPY_SRC, label: "pre_x" }),
-      norm: d.createBuffer({ size: cap * DIM * 2, usage: STORAGE, label: "pre_norm" }),
-      qkv: d.createBuffer({ size: cap * QKV_DIM * 2, usage: STORAGE, label: "pre_qkv" }),
-      q: d.createBuffer({ size: cap * DIM * 2, usage: STORAGE, label: "pre_q" }),
-      attn: d.createBuffer({ size: cap * DIM * 2, usage: STORAGE, label: "pre_attn" }),
-      mlpGateUp: d.createBuffer({ size: cap * FF_DIM * 2 * 2, usage: STORAGE, label: "pre_mlp_gu" }),
-      mlpMid: d.createBuffer({ size: cap * FF_DIM * 2, usage: STORAGE, label: "pre_mlp_mid" }),
+      x: d.createBuffer({ size: cap * DIM * 4, usage: STORAGE | COPY_SRC, label: "pre_x" }),
+      norm: d.createBuffer({ size: cap * DIM * 4, usage: STORAGE, label: "pre_norm" }),
+      qkv: d.createBuffer({ size: cap * QKV_DIM * 4, usage: STORAGE, label: "pre_qkv" }),
+      q: d.createBuffer({ size: cap * DIM * 4, usage: STORAGE, label: "pre_q" }),
+      attn: d.createBuffer({ size: cap * DIM * 4, usage: STORAGE, label: "pre_attn" }),
+      mlpGateUp: d.createBuffer({ size: cap * FF_DIM * 2 * 4, usage: STORAGE, label: "pre_mlp_gu" }),
+      mlpMid: d.createBuffer({ size: cap * FF_DIM * 4, usage: STORAGE, label: "pre_mlp_mid" }),
     };
     this.prefillCap = cap;
   }
@@ -2161,7 +2160,7 @@ export class NativeWebGpuDecoder {
     }
     pass.end();
 
-    const rowBytes = DIM * 2;
+    const rowBytes = DIM * 4;
     for (let b = 0; b < B; b++) {
       const srcOff = ((b * S) + (S - 1)) * rowBytes;
       cmd.copyBufferToBuffer(pb.x, srcOff, this.xDec, b * rowBytes, rowBytes);
