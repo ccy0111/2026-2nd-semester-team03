@@ -1,5 +1,6 @@
 """Serve the web application and model URLs for browser-side inference."""
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -11,11 +12,39 @@ from .model_manifest import HEADERS, load_runtime_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+LOCAL_LAYER_SHA = "96b8c44f046412c9a55a733af30c66efeadd0add5e12731e5c637ec4c85d4f60"
+LOCAL_LAYER_BYTES = 318110962
+
+
+def _local_layer_decoder() -> Path | None:
+    raw = os.environ.get("WEBSCORE_LOCAL_LAYER_DECODER")
+    if not raw:
+        return None
+    try:
+        p = Path(raw).resolve(strict=True)
+        if not p.is_file() or p.stat().st_size != LOCAL_LAYER_BYTES:
+            return None
+        with p.open("rb") as f:
+            if hashlib.file_digest(f, "sha256").hexdigest() != LOCAL_LAYER_SHA:
+                return None
+        return p
+    except OSError:
+        return None
 
 
 def create_app() -> FastAPI:
     frontend_dir = (ROOT / os.environ.get("FRONTEND_DIR", "frontend")).resolve()
     app = FastAPI(title="채보 플랫폼 MVP API")
+    layer_model = _local_layer_decoder()
+
+    @app.api_route("/api/local-preview/v2-grpo100-layerkv/decoder.onnx",
+                   methods=["HEAD", "GET"], include_in_schema=False)
+    def local_layer_decoder() -> FileResponse:
+        if layer_model is None or not layer_model.is_file():
+            raise HTTPException(404, "Local FP16 decoder not enabled")
+        return FileResponse(layer_model, media_type="application/octet-stream",
+                            headers={"Cache-Control": "private, max-age=3600"},
+                            filename=None)
 
     @app.get(
         "/api/model-manifest",

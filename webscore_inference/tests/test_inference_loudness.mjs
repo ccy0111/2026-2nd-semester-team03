@@ -47,7 +47,8 @@ test('worker message toggles preprocessing, preserving the original transfer and
     await listener({data:{type:'transcribe',pcm:x,boundaryMode:'prelude-forcing',normalizeLoudness}});
   }
   assert.equal(received.length,3);
-  assert.equal(received[0].pcm,x);
+  assert.notEqual(received[0].pcm,x);
+  near(measureLoudness(received[0].pcm).lufs,-18);
   assert.equal(received[1].pcm,x);
   assert.notEqual(received[2].pcm,x);
   near(measureLoudness(received[2].pcm).lufs,-18);

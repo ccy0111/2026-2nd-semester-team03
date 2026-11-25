@@ -31,7 +31,10 @@
 			<div class="input-row">
 				<input type="file" id="audio-input" class="file-input" accept=".mp3,audio/mpeg" aria-label="MP3 파일 선택">
 				<label for="normalize-loudness">
-					<input type="checkbox" id="normalize-loudness"> 채보 음량 맞추기 (목표 −18 LUFS)
+					<input type="checkbox" id="normalize-loudness" checked> 채보 음량 맞추기 (목표 −18 LUFS)
+				</label>
+				<label for="force-prelude" title="이전 구간의 음 연결을 프리루드로 전달해 한 구간씩 채보합니다.">
+					<input type="checkbox" id="force-prelude"> 프리루드 포싱
 				</label>
 				<button type="button" id="start-button" class="btn bg-primary text-white" disabled>채보 시작</button>
 			</div>

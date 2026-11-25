@@ -23,13 +23,13 @@ test('worker forwards boundaryMode and allowedPrograms and preserves chunk statu
   });
   vm.runInContext(src + '\nmodel = mockModel;', context);
   const pcm = new Float32Array(1);
-  await listener({data:{type:'transcribe',pcm,maxGenLen:99,boundaryMode:'pitch-tie',allowedPrograms:[0,128]}});
+  await listener({data:{type:'transcribe',pcm,normalizeLoudness:false,maxGenLen:99,boundaryMode:'pitch-tie',allowedPrograms:[0,128]}});
   assert.equal(calls[0].pcm,pcm);
   assert.equal(calls[0].options.boundaryMode,'pitch-tie');
   assert.equal(calls[0].options.maxGenLen,99);
   assert.deepEqual(calls[0].options.allowedPrograms,[0,128]);
   assert.deepEqual(messages[0],{type:'result',notes:[],chunkStatuses:[{index:0,status:'failed'}]});
-  await listener({data:{type:'transcribe',pcm}});
+  await listener({data:{type:'transcribe',pcm,normalizeLoudness:false}});
   assert.equal(Object.hasOwn(calls[1].options,'boundaryMode'),false);
   assert.equal(Object.hasOwn(calls[1].options,'allowedPrograms'),false);
 });
