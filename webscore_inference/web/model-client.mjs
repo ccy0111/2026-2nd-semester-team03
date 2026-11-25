@@ -140,7 +140,7 @@ export class WebScoreClient {
       urls[name] === `${packedRelease}/${name === "config.json" ? "config.web-abi-v1.json" : name}`);
     const isLoopback = ["127.0.0.1", "localhost", "[::1]"].includes(globalThis.location?.hostname);
     const isRdna3 = ort.env?.webgpu?.adapter?.info?.architecture === "rdna-3";
-    const hwWebGpu = !useInt8 && gpuKvCache && executionProviders[0] === "webgpu" &&
+    const hwWebGpu = !useInt8 && gpuKvCache && cacheEmbeddings && executionProviders[0] === "webgpu" &&
       !ort.env?.webgpu?.adapter?.info?.isFallbackAdapter &&
       arch?.model_type === "webscore-gqa" && arch?.dim === 1024 && arch?.num_layers === 14 &&
       arch?.num_heads === 16 && arch?.num_kv_heads === 4;
@@ -153,11 +153,12 @@ export class WebScoreClient {
       opts.extra = { ep: { webgpuexecutionprovider: { maxNumPendingDispatches: "64" } } };
     }
     let layerActive = false;
+    const decSessionOpts = gpuKvCache
+      ? { ...opts, preferredOutputLocation: { logits: gpuTokenSelection ? "gpu-buffer" : "cpu", present_k: "gpu-buffer", present_v: "gpu-buffer" } }
+      : opts;
     const loadSession = async (name) => {
       try {
-        const sessionOpts = gpuKvCache && name === decFile
-          ? { ...opts, preferredOutputLocation: { logits: gpuTokenSelection ? "gpu-buffer" : "cpu", present_k: "gpu-buffer", present_v: "gpu-buffer" } }
-          : opts;
+        const sessionOpts = name === decFile ? decSessionOpts : opts;
         if (name === decFile && hwWebGpu && ort.env?.webgpu?.device) {
           // Universal native WebGPU fused decoder (works on NVIDIA, AMD, Apple Silicon, Intel).
           // Prefer local preview ONNX on loopback when present, otherwise load directly from urls[name].
@@ -230,11 +231,56 @@ export class WebScoreClient {
         hasBatch(encoderSession, "mel", 0) && hasBatch(decoderSession, "inputs_embeds", 0) &&
         hasBatch(decoderSession, "past_k", 1) && hasBatch(decoderSession, "past_v", 1));
       client.gpuFeedbackBlock = client.gpuBatchPairs && gpuFeedbackBlock === 4 ? 4 : 0;
+      client._batchArtifact = batchArtifact;
+      if (decoderSession.nativeWebGpuDecoder) {
+        client._fallbackDecoderFactory = async () => {
+          try {
+            return await ort.InferenceSession.create(urls[decFile], decSessionOpts);
+          } catch {
+            throw new Error(`Failed to load ${decFile}: check access, URL expiry and model compatibility`);
+          }
+        };
+      }
       return client;
     } catch {
       await Promise.allSettled([encoderSession, embedSession, decoderSession].map(s => s?.release?.()));
       throw new Error("Invalid model metadata or interface");
     }
+  }
+
+  async _fallbackFromNativeDecoder(signal = null) {
+    throwIfAborted(signal);
+    if (this.disposed || !this.decoderSession?.nativeWebGpuDecoder || typeof this._fallbackDecoderFactory !== "function") {
+      return false;
+    }
+    const factory = this._fallbackDecoderFactory;
+    if (!this._nativeDecoderReleased) {
+      const oldSession = this.decoderSession;
+      this._nativeDecoderReleased = true;
+      await Promise.allSettled([Promise.resolve().then(() => oldSession.release?.())]);
+    }
+    throwIfAborted(signal);
+    const stdSession = await factory();
+    if (this.disposed || signal?.aborted) {
+      await Promise.allSettled([stdSession?.release?.()]);
+      throwIfAborted(signal);
+      throw new Error("Client has been disposed");
+    }
+    this.decoderSession = stdSession;
+    this._fallbackDecoderFactory = null;
+    this._nativeDecoderReleased = false;
+    this.localLayerKv = false;
+    this.localProjectionFusion = false;
+    this.gpuSerialFeedbackBlock = 0;
+    this.gpuBatchWidth = Math.min(4, Math.max(2, this.gpuBatchWidth | 0));
+    const hasBatch = (session, name, axis) => session.inputMetadata?.some(input =>
+      input.name === name && (input.shape?.[axis] === "batch" || input.shape?.[axis] === 2));
+    this.gpuBatchPairs = Boolean(this.gpuBatchPairs && this._batchArtifact && this.tokenSelector &&
+      hasBatch(this.encoderSession, "mel", 0) && hasBatch(stdSession, "inputs_embeds", 0) &&
+      hasBatch(stdSession, "past_k", 1) && hasBatch(stdSession, "past_v", 1));
+    if (!this.gpuBatchPairs) this.gpuFeedbackBlock = 0;
+    console.warn("[WebScore] Native WebGPU decoder failed during inference; fell back to standard FP16 decoder");
+    return true;
   }
 
   async embedTokenIds(ids) {
@@ -256,6 +302,7 @@ export class WebScoreClient {
   }
 
   async transcribeChunk(pcm5s, options = {}) {
+    if (this._nativeDecoderReleased) await this._fallbackFromNativeDecoder(options.signal);
     const block = options[serialFeedback] && !this.serialFeedbackDisabled && !this.tokenSelectorDisabled
       ? this.gpuSerialFeedbackBlock : 0;
     if (![4,8].includes(block) || !this.localLayerKv || !this.tokenSelector) {
@@ -341,23 +388,36 @@ export class WebScoreClient {
     const posTensor = new this.ort.Tensor("int64", posData, [1]);
     const generated = [...promptTokens];
     if (typeof this.decoderSession?.generateBlockNative === "function" && this.embeddingTable) {
-      const nativeRes = await this.decoderSession.generateBlockNative({
-        prefillData,
-        batchSize: 1,
-        prefillLen,
-        maxGenLen,
-        maskedIds,
-        eosId: this.lookup.eosId,
-        vocabSize: this.lookup.idToEvent.length,
-        embeddingTable: this.embeddingTable,
-        blockSize: 64,
-        signal,
-        stats: this.serialFeedbackStats ?? null,
-        onGpuWait,
-      });
-      for (const id of nativeRes.tokens[0]) generated.push(id);
-      if (nativeRes.done[0]) return generated;
-      throw new TokenLimitError();
+      let nativeRes = null;
+      try {
+        nativeRes = await this.decoderSession.generateBlockNative({
+          prefillData,
+          batchSize: 1,
+          prefillLen,
+          maxGenLen,
+          maskedIds,
+          eosId: this.lookup.eosId,
+          vocabSize: this.lookup.idToEvent.length,
+          embeddingTable: this.embeddingTable,
+          blockSize: 64,
+          signal,
+          stats: this.serialFeedbackStats ?? null,
+          onGpuWait,
+        });
+      } catch (error) {
+        throwIfAborted(signal);
+        if (error instanceof TokenLimitError) throw error;
+        if (await this._fallbackFromNativeDecoder(signal)) {
+          block = 0;
+        } else {
+          throw error;
+        }
+      }
+      if (nativeRes) {
+        for (const id of nativeRes.tokens[0]) generated.push(id);
+        if (nativeRes.done[0]) return generated;
+        throw new TokenLimitError();
+      }
     }
     // Single-token causal rows are all zero. Reuse bounded storage for their
     // views instead of allocating and clearing an O(past length) buffer per token.
@@ -481,6 +541,7 @@ export class WebScoreClient {
     };
     this.transcribing = true;
     try {
+      if (this._nativeDecoderReleased) await this._fallbackFromNativeDecoder(signal);
       const chunks = splitPcmInto5sChunks(pcm16k);
       const allNotes = [];
       const tokensByChunk = [];
@@ -509,10 +570,20 @@ export class WebScoreClient {
               break;
             } catch {
               throwIfAborted(signal);
+              if (!this.gpuBatchPairs) break;
               if (width > 2) {
-                this.gpuBatchWidth = 2;
-                width = 2;
-                console.warn("[WebScore] Wide GPU decode unavailable; trying batch width 2");
+                const nextWidth = this.decoderSession?.nativeWebGpuDecoder
+                  ? 2
+                  : boundedGpuBatchWidth(Math.min(this.gpuBatchWidth ?? 4, width - 1), chunks.length - idx, maxGenLen, this.gpuKvBindingBytes);
+                if (nextWidth >= 2) {
+                  this.gpuBatchWidth = nextWidth;
+                  width = nextWidth;
+                  console.warn(`[WebScore] Wide GPU decode unavailable; trying batch width ${nextWidth}`);
+                } else {
+                  this.batchPairsDisabled = true;
+                  console.warn("[WebScore] Batched GPU decode unavailable; using sequential pitch-tie");
+                  break;
+                }
               } else {
                 this.batchPairsDisabled = true;
                 console.warn("[WebScore] Batched GPU decode unavailable; using sequential pitch-tie");
@@ -591,7 +662,7 @@ export class WebScoreClient {
     this.disposed = true;
     this.embeddingTable = null;
     this.tokenSelector?.dispose();
-    const results = await Promise.allSettled([this.encoderSession, this.embedSession, this.decoderSession].map(s => s?.release?.()));
+    const results = await Promise.allSettled([this.encoderSession, this.embedSession, this._nativeDecoderReleased ? null : this.decoderSession].map(s => s?.release?.()));
     if (results.some(r => r.status === "rejected")) throw new Error("One or more model sessions could not be released");
   }
 
