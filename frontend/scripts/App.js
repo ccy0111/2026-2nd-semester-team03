@@ -9,6 +9,7 @@
 //   4. 원본 MP3 Blob URL 다운로드, 다 쓴 URL과 모델 세션 해제
 //   5. 실패하면 파일 선택을 유지한 채 재시도
 // + 채보 결과 재생 (docs/MVP_REQUIREMENTS.md "채보 결과 재생 연동"): 재생·위치·음소거
+// + 내보내기: MIDI 다운로드(모델이 만든 midiBytes), 악보 PDF 저장(SheetView)
 // ==========================================================
 import { ModelService } from "./ModelService.js";
 import { ScoreRenderer } from "./ScoreRenderer.js";
@@ -41,6 +42,7 @@ export class App {
 		this.noteMuteButton = document.querySelector("#note-mute");
 		this.noteTimeText = document.querySelector("#note-time");
 		this.noteMessage = document.querySelector("#note-message");
+		this.midiButton = document.querySelector("#midi-button");
 
 		// 기능 담당 객체
 		this.modelService = new ModelService();
@@ -60,6 +62,7 @@ export class App {
 			audioArea: document.querySelector("#sheet-audio"),
 			sheetArea: document.querySelector("#sheet-area"),
 			messageText: document.querySelector("#sheet-message"),
+			pdfButton: document.querySelector("#pdf-button"),
 		});
 		this.player = new AudioPlayer({
 			audio: document.querySelector("#audio-player"),
@@ -108,6 +111,8 @@ export class App {
 		this.retryAction = null; // 재시도 버튼이 실행할 함수 (실패 종류에 따라 다름)
 		this.retryKind = null;   // "model"(모델 준비 실패) | "transcribe"(채보 실패)
 		this.lastSource = "original"; // 피아노롤 커서·클릭이 따를 재생기: "original" | "notes"
+		this.midiBytes = null;  // 마지막 채보 결과의 MIDI 파일 내용
+		this.songTitle = "";    // MP3 파일 이름(확장자 제외) — 악보 제목, 저장 파일 이름
 	}
 
 	async init() {
@@ -128,6 +133,7 @@ export class App {
 			}
 			this.notePlayer.toggle();
 		});
+		this.midiButton.addEventListener("click", () => this.downloadMidi());
 		this.noteMuteButton.addEventListener("click", () => {
 			this.notePlayer.setMuted(!this.notePlayer.isMuted);
 		});
@@ -255,12 +261,16 @@ export class App {
 		this.loadModel(); // 내부의 terminate()가 진행 중인 채보를 중단시킴
 	}
 
-	showResult({ notes, chunkStatuses = [] }) {
+	showResult({ notes, chunkStatuses = [], midiBytes = null }) {
 		const instruments = this.renderer.render(notes, chunkStatuses);
 		this.instrumentLegend.render(instruments);
 		// 노래 제목 = MP3 파일 이름에서 확장자(.mp3)를 뺀 것 (악보 제목에 사용)
-		const songTitle = (this.audioInput.files[0]?.name ?? "").replace(/\.[^.]+$/, "");
-		this.sheetView.setResult(notes, instruments, songTitle);
+		this.songTitle = (this.audioInput.files[0]?.name ?? "").replace(/\.[^.]+$/, "");
+		this.sheetView.setResult(notes, instruments, this.songTitle);
+
+		// MIDI 다운로드: 모델이 MIDI를 돌려줬을 때만 버튼 표시
+		this.midiBytes = midiBytes instanceof Uint8Array && midiBytes.length > 0 ? midiBytes : null;
+		this.midiButton.classList.toggle("is-hidden", !this.midiBytes);
 		this.viewTabs.classList.remove("is-hidden");
 		this.renderer.setCursor(this.player.audio.currentTime, false);
 
@@ -309,6 +319,7 @@ export class App {
 		this.instrumentLegend.clear();
 		this.sheetView.clear();
 		this.notePlayer.clear();
+		this.midiBytes = null;
 		this.useSource("original");
 		this.noteMessage.textContent = "";
 		this.notePlayerArea.classList.add("is-hidden");
@@ -335,6 +346,29 @@ export class App {
 		} else {
 			this.sheetView.hide();
 		}
+	}
+
+	// 채보 페이지를 떠날 때: 소리 모두 멈춤 (결과는 그대로)
+	pauseAll() {
+		this.player.audio.pause();
+		this.notePlayer.pause();
+		this.sheetView.stopSynth();
+	}
+
+	// ---------- 내보내기 ----------
+	// 모델이 만든 MIDI를 파일로 저장 (Blob URL을 잠깐 만들었다가 해제)
+	downloadMidi() {
+		if (!this.midiBytes) return;
+		const blob = new Blob([this.midiBytes], { type: "audio/midi" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = `${this.songTitle || "채보결과"}.mid`;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		// 다운로드가 시작될 시간을 준 뒤 해제
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 
 	// ---------- 악기 소리 재생 표시 ----------

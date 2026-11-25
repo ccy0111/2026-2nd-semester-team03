@@ -25,10 +25,10 @@ const FAMILIES = [
 	["신스 효과", "#748ffc"],
 	["민속 악기", "#a9844d"],
 	["타악기류", "#868e96"],          // 팀파니, 스틸드럼 등 음높이 있는 타악기
-	["효과음", "#495057"],
+	["효과음", "#8c8fa3"],
 ];
 
-const DRUMS = { key: "drums", name: "드럼·타악기", color: "#212529" };
+const DRUMS = { key: "drums", name: "드럼·타악기", color: "#d1d5db" }; // 어두운 배경에서 보이도록 밝은 회색
 const OTHER = { key: "other", name: "그 밖의 악기", color: "#adb5bd" };
 
 // note → { key, name, color }
