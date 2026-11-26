@@ -4,7 +4,69 @@
 	- 색, 간격 값은 root.css의 변수를 사용
 	========================================================== */
 
-/* ---------- 헤더 ---------- */
+/* ---------- 위쪽 메뉴 (모든 페이지 공통) ---------- */
+.site-nav {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	border-bottom: 1px solid var(--color-line);
+	background-color: rgba(13, 11, 20, 0.75);
+	backdrop-filter: blur(14px);
+}
+
+.site-nav-inner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	max-width: 1080px;
+	height: 60px;
+	margin: 0 auto;
+	padding: 0 var(--space-md);
+}
+
+.brand {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-sm);
+	font-weight: 800;
+	text-decoration: none;
+}
+
+.brand-mark {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+	color: var(--color-white);
+	font-size: 15px;
+}
+
+.nav-links {
+	display: flex;
+	gap: var(--space-xs);
+}
+
+.nav-link {
+	padding: 6px 14px;
+	border-radius: 999px;
+	color: var(--color-sub);
+	font-size: 14px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.nav-link:hover {
+	color: var(--color-main);
+}
+
+.nav-link.is-active {
+	background-color: var(--color-primary-soft);
+	color: var(--color-accent);
+}
+
+/* ---------- 채보 페이지 ---------- */
 .app-header {
 	max-width: 1080px;
 	margin: 0 auto;
@@ -16,7 +78,6 @@
 	font-size: var(--font-size-xl);
 }
 
-/* ---------- 본문 ---------- */
 .app-main {
 	display: flex;
 	flex-direction: column;
@@ -28,6 +89,7 @@
 
 .panel {
 	padding: var(--space-lg);
+	border: 1px solid var(--color-line);
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-sm);
 }
@@ -38,6 +100,48 @@
 }
 
 /* ---------- 입력 영역 ---------- */
+/* 채보 옵션: 켜면 보라 테두리 칩 */
+.option-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-sm);
+	margin-top: var(--space-sm);
+}
+
+.option-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-sm);
+	padding: 6px 12px;
+	border: 1px solid var(--color-line);
+	border-radius: 999px;
+	background-color: var(--color-surface-2);
+	font-size: var(--font-size-sm);
+	cursor: pointer;
+	transition: border-color 0.15s, background-color 0.15s;
+}
+
+.option-chip input {
+	accent-color: var(--color-primary);
+	margin: 0;
+}
+
+.option-chip small {
+	margin-left: 2px;
+	color: var(--color-sub);
+	font-size: 12px;
+}
+
+.option-chip:has(input:checked) {
+	border-color: var(--color-primary);
+	background-color: var(--color-primary-soft);
+}
+
+.option-chip:has(input:disabled) {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
 .input-row {
 	display: flex;
 	flex-wrap: wrap;
@@ -51,7 +155,20 @@
 	padding: var(--space-sm);
 	border: 1px solid var(--color-line);
 	border-radius: var(--radius-sm);
+	background-color: var(--color-surface-2);
 	font: inherit;
+}
+
+.file-input::file-selector-button {
+	margin-right: var(--space-sm);
+	padding: 6px 12px;
+	border: none;
+	border-radius: 6px;
+	background-color: var(--color-primary-soft);
+	color: var(--color-accent);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
 }
 
 .status-row {
@@ -123,6 +240,7 @@
 	border-radius: var(--radius-sm);
 	padding: var(--space-sm);
 	min-height: 120px;
+	background-color: var(--color-row-black);
 }
 
 /* 악보가 그려졌을 때만 클릭 가능 표시 */
@@ -150,7 +268,7 @@
 /* 음표 색은 악기별로 JS가 지정 (instruments.js), 여기는 기본값 */
 .score-note {
 	fill: var(--color-note);
-	stroke: rgba(0, 0, 0, 0.25);
+	stroke: rgba(0, 0, 0, 0.45);
 	stroke-width: 0.5;
 }
 
@@ -225,10 +343,10 @@
 	font-size: var(--font-size-sm);
 }
 
-/* 시간 글자: 실패 구간(회색) 위에서도 보이도록 흰 테두리 */
+/* 시간 글자: 실패 구간(회색) 위에서도 보이도록 배경색 테두리 */
 .score-time-label {
 	fill: var(--color-main);
-	stroke: var(--color-white);
+	stroke: var(--color-row-white);
 	stroke-width: 3px;
 	paint-order: stroke;
 	pointer-events: none;
@@ -256,7 +374,7 @@
 /* 복구 구간: 옅은 노란 박스 */
 .score-chunk-recovered {
 	fill: var(--color-chunk-recovered);
-	opacity: 0.6;
+	opacity: 0.25;
 }
 
 /* 현재 재생 위치 */
@@ -293,7 +411,7 @@
 	width: 0;
 	height: 100%;
 	border-radius: 999px;
-	background-color: var(--color-primary);
+	background: linear-gradient(90deg, var(--color-primary), var(--color-accent));
 	transition: width 0.4s ease;
 }
 
@@ -334,6 +452,7 @@
 /* ---------- 보기 전환 탭 ---------- */
 .view-tabs {
 	display: flex;
+	align-items: center;
 	gap: var(--space-xs);
 	margin-bottom: var(--space-md);
 	border-bottom: 1px solid var(--color-line);
@@ -352,7 +471,20 @@
 
 .view-tab.is-active {
 	border-bottom-color: var(--color-primary);
-	color: var(--color-primary);
+	color: var(--color-accent);
+}
+
+/* 탭 오른쪽 끝 내보내기 버튼 (MIDI) */
+.view-actions {
+	display: flex;
+	gap: var(--space-sm);
+	margin-left: auto;
+	padding-bottom: var(--space-xs);
+}
+
+.btn-sm {
+	padding: 6px 12px;
+	font-size: var(--font-size-sm);
 }
 
 /* ---------- 악보 보기 ---------- */
@@ -376,7 +508,14 @@
 	padding: var(--space-xs) var(--space-sm);
 	border: 1px solid var(--color-line);
 	border-radius: var(--radius-sm);
+	background-color: var(--color-surface-2);
+	color: var(--color-main);
 	font: inherit;
+}
+
+/* 악보 컨트롤 줄 오른쪽 끝 (PDF 저장) */
+.sheet-controls .sheet-export {
+	margin-left: auto;
 }
 
 .sheet-field input {
@@ -397,7 +536,8 @@
 	border: 1px solid var(--color-line);
 	border-radius: var(--radius-sm);
 	padding: var(--space-sm);
-	background-color: var(--color-white);
+	background-color: var(--color-paper);
+	color: #111111; /* abcjs는 글자색(currentColor)으로 악보를 그림 → 종이 위 검은 악보 */
 	min-height: 120px;
 }
 
@@ -411,8 +551,9 @@
 	gap: var(--space-xs);
 	max-width: 560px;
 	padding: var(--space-xs) var(--space-sm);
+	border: 1px solid var(--color-line);
 	border-radius: var(--radius-sm);
-	background-color: var(--color-main);
+	background-color: var(--color-surface-2);
 	color: var(--color-white);
 	font-size: var(--font-size-sm);
 }
@@ -484,7 +625,7 @@
 	margin: 0 var(--space-sm);
 	padding: 0;
 	border: none;
-	background: linear-gradient(var(--color-sub), var(--color-sub)) center / 100% 8px no-repeat;
+	background: linear-gradient(var(--color-line), var(--color-line)) center / 100% 8px no-repeat;
 	border-radius: 4px;
 	cursor: pointer;
 }
@@ -517,6 +658,7 @@
 	margin-right: 2px;
 	border: none;
 	border-radius: 4px;
+	background-color: var(--color-base);
 	font: inherit;
 	color: var(--color-main);
 }
@@ -536,3 +678,353 @@
 	stroke-width: 2;
 }
 
+
+
+/* ==========================================================
+	메인(소개) 페이지 — 새 제품 광고 사이트처럼 큰 글씨 + 한 화면에 한 메시지
+	========================================================== */
+.landing {
+	overflow: hidden;
+}
+
+.section {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: var(--space-2xl) var(--space-md);
+	text-align: center;
+}
+
+.eyebrow {
+	margin-bottom: var(--space-md);
+	color: var(--color-accent);
+	font-size: 14px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+}
+
+.section-title {
+	margin-bottom: var(--space-md);
+	font-size: clamp(30px, 4.5vw, 52px);
+	font-weight: 800;
+	line-height: 1.2;
+	letter-spacing: -0.02em;
+}
+
+.section-lead {
+	max-width: 620px;
+	margin: 0 auto;
+	color: var(--color-sub);
+	font-size: 18px;
+}
+
+/* 보라 그라데이션 글씨 */
+.gradient-text {
+	background: linear-gradient(120deg, #ffffff 10%, var(--color-accent) 55%, var(--color-primary) 90%);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* ---------- 첫 화면 ---------- */
+.hero {
+	position: relative;
+	padding-top: 120px;
+}
+
+/* 뒤쪽 보라 빛 */
+.hero::before {
+	content: "";
+	position: absolute;
+	top: -120px;
+	left: 50%;
+	z-index: -1;
+	width: 900px;
+	height: 600px;
+	transform: translateX(-50%);
+	background: radial-gradient(closest-side, rgba(139, 92, 246, 0.35), transparent);
+	pointer-events: none;
+}
+
+.hero-title {
+	margin-bottom: var(--space-lg);
+	font-size: var(--font-size-hero);
+	font-weight: 800;
+	line-height: 1.08;
+	letter-spacing: -0.035em;
+}
+
+.hero-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--space-sm);
+	margin-top: var(--space-xl);
+}
+
+/* 제품 사진 자리: 움직이는 미니 피아노롤 */
+.hero-device {
+	position: relative;
+	max-width: 760px;
+	margin: 72px auto 0;
+	padding: 18px;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-lg);
+	background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+	box-shadow: var(--shadow-glow);
+}
+
+.device-bar {
+	display: flex;
+	gap: 6px;
+	margin-bottom: 14px;
+}
+
+.device-bar span {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background-color: var(--color-line);
+}
+
+.device-roll {
+	position: relative;
+	height: 220px;
+	overflow: hidden;
+	border-radius: var(--radius-sm);
+	background: repeating-linear-gradient(180deg, var(--color-row-white) 0 20px, var(--color-row-black) 20px 40px);
+}
+
+/* 음표 막대: 위치·길이·색은 HTML의 style 변수로 */
+.demo-note {
+	position: absolute;
+	left: var(--x);
+	top: var(--y);
+	width: var(--w);
+	height: 14px;
+	border-radius: 4px;
+	background-color: var(--c, var(--color-primary));
+	box-shadow: 0 0 12px var(--c, var(--color-primary));
+	opacity: 0;
+	animation: note-in 6s ease-in-out infinite;
+	animation-delay: var(--d);
+}
+
+.demo-cursor {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background-color: var(--color-cursor);
+	box-shadow: 0 0 10px var(--color-cursor);
+	animation: cursor-move 6s linear infinite;
+}
+
+@keyframes note-in {
+	0%, 5% { opacity: 0; transform: scaleX(0.3); transform-origin: left; }
+	15%, 85% { opacity: 1; transform: scaleX(1); }
+	100% { opacity: 0; }
+}
+
+@keyframes cursor-move {
+	from { left: 0; }
+	to { left: 100%; }
+}
+
+/* ---------- 숫자 강조 줄 ---------- */
+.stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: var(--space-lg);
+	margin-top: var(--space-xl);
+}
+
+.stat-value {
+	display: block;
+	margin-bottom: var(--space-xs);
+	font-size: clamp(36px, 5vw, 56px);
+	font-weight: 800;
+	letter-spacing: -0.03em;
+}
+
+.stat-label {
+	color: var(--color-sub);
+}
+
+/* ---------- 기능 카드 ---------- */
+.feature-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: var(--space-md);
+	margin-top: var(--space-xl);
+	text-align: left;
+}
+
+.feature-card {
+	padding: var(--space-lg);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-md);
+	background: linear-gradient(180deg, var(--color-surface-2), var(--color-surface));
+	transition: border-color 0.2s, transform 0.2s;
+}
+
+.feature-card:hover {
+	border-color: var(--color-primary);
+	transform: translateY(-4px);
+}
+
+.feature-icon {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	margin-bottom: var(--space-md);
+	border-radius: 12px;
+	background-color: var(--color-primary-soft);
+	font-size: 22px;
+}
+
+.feature-card h3 {
+	margin-bottom: var(--space-xs);
+	font-size: 18px;
+}
+
+.feature-card p {
+	color: var(--color-sub);
+	font-size: 14px;
+}
+
+/* ---------- 사용 순서 ---------- */
+.steps {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: var(--space-lg);
+	margin-top: var(--space-xl);
+	counter-reset: step;
+}
+
+.step {
+	position: relative;
+	padding-top: 56px;
+}
+
+.step::before {
+	counter-increment: step;
+	content: counter(step, decimal-leading-zero);
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	color: var(--color-primary);
+	font-size: 36px;
+	font-weight: 800;
+}
+
+.step h3 {
+	margin-bottom: var(--space-xs);
+}
+
+.step p {
+	color: var(--color-sub);
+	font-size: 14px;
+}
+
+/* ---------- 마지막 권유 ---------- */
+.cta-box {
+	padding: 72px var(--space-lg);
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-lg);
+	background: radial-gradient(ellipse at top, rgba(139, 92, 246, 0.3), transparent 70%), var(--color-surface);
+}
+
+.footer-team {
+	margin-bottom: var(--space-xs);
+	color: var(--color-main);
+	font-size: 16px;
+}
+
+.site-footer {
+	padding: var(--space-xl) var(--space-md);
+	border-top: 1px solid var(--color-line);
+	color: var(--color-sub);
+	font-size: var(--font-size-sm);
+	text-align: center;
+}
+
+/* 스크롤해서 보일 때 아래에서 떠오르기 (JS가 is-visible을 붙임) */
+.reveal {
+	opacity: 0;
+	transform: translateY(32px);
+	transition: opacity 0.8s ease, transform 0.8s ease;
+}
+
+.reveal.is-visible {
+	opacity: 1;
+	transform: none;
+}
+
+/* 움직임 줄이기 설정을 켠 사용자는 애니메이션 없이 */
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+
+	.reveal {
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
+
+	.demo-note,
+	.demo-cursor {
+		animation: none;
+		opacity: 1;
+	}
+}
+
+/* ==========================================================
+	인쇄 (악보 PDF 저장): 악보 종이만 인쇄
+	========================================================== */
+@media print {
+	@page {
+		size: A4;
+		margin: 12mm;
+	}
+
+	body {
+		background: #ffffff;
+	}
+
+	body * {
+		visibility: hidden;
+	}
+
+	#sheet-area,
+	#sheet-area * {
+		visibility: visible;
+	}
+
+	#sheet-area {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		overflow: visible;
+		border: none;
+		padding: 0;
+	}
+
+	/* SheetView.printPdf()가 viewBox를 넣어 두어서 종이 너비에 맞게 줄어듦 */
+	#sheet-area svg {
+		width: 100% !important;
+		height: auto !important;
+	}
+
+	/* 재생 중 표시는 인쇄하지 않음 */
+	#sheet-area .abcjs-highlight {
+		fill: currentColor;
+	}
+
+	#sheet-area .abcjs-cursor {
+		display: none;
+	}
+}

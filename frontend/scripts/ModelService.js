@@ -132,7 +132,7 @@ export class ModelService {
 		} else if (data.type === "loaded") {
 			this.finish("resolve");
 		} else if (data.type === "result") {
-			this.finish("resolve", { notes: data.notes, chunkStatuses: data.chunkStatuses });
+			this.finish("resolve", { notes: data.notes, chunkStatuses: data.chunkStatuses, midiBytes: data.midiBytes });
 		} else if (data.type === "error") {
 			this.finish("reject", new Error(data.message));
 		}

@@ -36,6 +36,7 @@ export class SheetView {
 		this.audioArea = elements.audioArea;   // abcjs 재생 버튼 자리
 		this.sheetArea = elements.sheetArea;   // 악보가 그려질 자리
 		this.messageText = elements.messageText;
+		this.pdfButton = elements.pdfButton;   // 악보 PDF 저장(인쇄) 버튼
 
 		this.notes = [];
 		this.songTitle = "";
@@ -56,6 +57,7 @@ export class SheetView {
 		this.bpmInput.addEventListener("change", () => this.render());
 		// 음표 클릭 → 그 위치부터 재생
 		this.sheetArea.addEventListener("click", (event) => this.handleSheetClick(event));
+		this.pdfButton.addEventListener("click", () => this.printPdf());
 	}
 
 	// 채보 결과 받기 (instruments: InstrumentLegend와 같은 목록)
@@ -237,6 +239,31 @@ export class SheetView {
 		} catch (error) {
 			console.warn(error);
 		}
+	}
+
+	// ---------- PDF 저장 ----------
+	// 브라우저 인쇄 창을 열고, style.css의 @media print가 악보 종이만 인쇄되게 함
+	// (인쇄 창에서 대상을 "PDF로 저장"으로 고르면 PDF 파일이 됨)
+	printPdf() {
+		const svgs = this.sheetArea.querySelectorAll("svg");
+		if (!this.visualObj || svgs.length === 0) {
+			this.setMessage("저장할 악보가 없어요.");
+			return;
+		}
+		this.stopSynth();
+		// viewBox를 넣어 두면 인쇄할 때 종이 너비에 맞춰 악보 전체가 같이 줄어듦 (화면 모양은 그대로)
+		svgs.forEach((svg) => {
+			if (svg.hasAttribute("viewBox")) return;
+			const width = parseFloat(svg.getAttribute("width"));
+			const height = parseFloat(svg.getAttribute("height"));
+			if (width > 0 && height > 0) svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+		});
+		// 저장 창의 기본 파일 이름 = 문서 제목 → "노래 제목 - 악기" 로 잠깐 바꿨다가 되돌림
+		const originalTitle = document.title;
+		const name = this.instrumentSelect.selectedOptions[0]?.dataset.name ?? "";
+		document.title = [this.songTitle || "악보", name].filter(Boolean).join(" - ");
+		window.addEventListener("afterprint", () => { document.title = originalTitle; }, { once: true });
+		window.print();
 	}
 
 	// 템포 입력 읽기: 40~240으로 맞추고, 비었거나 숫자가 아니면 마지막 값 유지 (40으로 바뀌지 않게)

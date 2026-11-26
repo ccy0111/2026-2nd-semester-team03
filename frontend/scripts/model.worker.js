@@ -156,5 +156,6 @@ async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normali
 		pcm = normalizeInferenceLoudness(pcm);
 	}
 	const result = await model.transcribePcm(pcm, options);
-	return { notes: result.notes, chunkStatuses: result.chunkStatuses };
+	// midiBytes: 모델이 만든 MIDI 파일 내용 (Uint8Array) → 프론트의 "MIDI 다운로드"에 사용
+	return { notes: result.notes, chunkStatuses: result.chunkStatuses, midiBytes: result.midiBytes };
 }
