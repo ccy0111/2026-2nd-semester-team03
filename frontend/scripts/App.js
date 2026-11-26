@@ -217,6 +217,7 @@ export class App {
 		this.progressBar.start("모델 버전 확인·음원 분석 준비 중...");
 
 		let failedSoFar = 0;
+		this.startLivePreview();
 		try {
 			const result = await this.modelService.transcribe(file, (progress) => {
 				if (progress.chunkStatus?.status === "failed") failedSoFar += 1;
@@ -224,10 +225,14 @@ export class App {
 			}, {
 				boundaryMode: this.forcePrelude?.checked ? "prelude-forcing" : "pitch-tie",
 				normalizeLoudness: this.normalizeLoudness.checked,
+				// 5초 구간마다 중간 결과 → 실시간 피아노롤 (docs/CHUNK_NOTE_STREAM.md)
+				onChunkNotes: (update) => this.handleChunkNotes(update),
 			});
+			this.stopLivePreview(); // 최종 결과로 바꾸기 전에 남은 미리보기 그리기 취소
 			this.showResult(result);
 		} catch (error) {
 			console.error(error);
+			this.stopLivePreview();
 			if (this.cancelRequested) {
 				// 사용자가 취소한 경우: 실패로 표시하지 않음 (모델은 handleCancel에서 다시 준비 중)
 				this.renderer.clear("채보를 취소했습니다.");
@@ -258,6 +263,7 @@ export class App {
 		if (performance.now() - this.startedAt < 800) return;
 		this.cancelRequested = true;
 		this.cancelButton.classList.add("is-hidden");
+		this.stopLivePreview(); // 늦게 도착하는 중간 결과는 무시
 		this.loadModel(); // 내부의 terminate()가 진행 중인 채보를 중단시킴
 	}
 
@@ -315,6 +321,7 @@ export class App {
 
 	// 이전 결과 지우기 (새 파일 선택 / 새 채보 시작)
 	resetResult() {
+		this.stopLivePreview();
 		this.renderer.clear();
 		this.instrumentLegend.clear();
 		this.sheetView.clear();
@@ -346,6 +353,55 @@ export class App {
 		} else {
 			this.sheetView.hide();
 		}
+	}
+
+	// ---------- 실시간 미리보기 (채보 중 피아노롤) ----------
+	// 확정 음표(finalized)는 계속 쌓고, 이어지는 음(provisional)은 매번 통째로 바꿈
+	// MIDI·PDF·재생·악보 탭은 최종 결과가 나온 뒤에만 열림 (showResult)
+	startLivePreview() {
+		this.stopLivePreview();
+		this.live = { finalized: [], provisional: [], statuses: [], doneSec: 0, totalSec: 0 };
+	}
+
+	handleChunkNotes(update) {
+		const live = this.live;
+		if (!live || this.cancelRequested || !update) return;
+		if (Array.isArray(update.finalizedNotes)) live.finalized.push(...update.finalizedNotes);
+		live.provisional = Array.isArray(update.provisionalNotes) ? update.provisionalNotes : [];
+		const chunk = update.chunkStatus;
+		if (chunk) {
+			live.statuses.push(chunk);
+			live.doneSec = Math.max(live.doneSec, chunk.endSec ?? 0);
+		}
+		// 곡 전체 길이(대략): 구간 수 × 5초 → 처음부터 전체 폭으로 그려 둠
+		if (Number.isFinite(update.totalChunks)) live.totalSec = Math.max(live.totalSec, update.totalChunks * 5);
+
+		// GPU에서는 여러 구간이 한꺼번에 올 수 있음 → 한 프레임에 한 번만 그림
+		if (this.liveFrame) return;
+		this.liveFrame = requestAnimationFrame(() => {
+			this.liveFrame = null;
+			if (this.live !== live) return; // 그 사이 채보가 끝났거나 취소됨
+			this.renderer.render(live.finalized, live.statuses, {
+				live: true,
+				provisional: live.provisional,
+				doneSec: live.doneSec,
+				totalSec: live.totalSec,
+			});
+			const pitched = live.finalized.filter((note) => !note.isDrum).length;
+			const drums = live.finalized.length - pitched;
+			const failed = live.statuses.filter((status) => status.status === "failed").length;
+			const parts = [`실시간 미리보기 · 음표 ${pitched}개`];
+			if (drums) parts.push(`드럼·타악기 ${drums}개`);
+			if (failed) parts.push(`실패 구간 ${failed}개`);
+			this.scoreSummary.textContent = `${parts.join(" · ")} (흐린 점선 = 아직 이어지는 음)`;
+			this.scoreLegend.classList.remove("is-hidden");
+		});
+	}
+
+	stopLivePreview() {
+		if (this.liveFrame) cancelAnimationFrame(this.liveFrame);
+		this.liveFrame = null;
+		this.live = null;
 	}
 
 	// 채보 페이지를 떠날 때: 소리 모두 멈춤 (결과는 그대로)

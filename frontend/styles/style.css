@@ -377,6 +377,32 @@
 	opacity: 0.25;
 }
 
+/* ---------- 실시간 미리보기 (채보 중) ---------- */
+/* 아직 다음 구간으로 이어지는 음: 흐리게 + 점선 */
+.score-note.is-provisional {
+	fill-opacity: 0.35;
+	stroke-width: 1;
+	stroke-dasharray: 3 2;
+}
+
+/* 아직 채보하지 않은 곳 */
+.score-pending {
+	fill: var(--color-base);
+	opacity: 0.6;
+}
+
+.score-live-edge {
+	stroke: var(--color-accent);
+	stroke-width: 2;
+	stroke-dasharray: 4 3;
+}
+
+.score-live-label {
+	fill: var(--color-accent);
+	font-size: 11px;
+	font-weight: 700;
+}
+
 /* 현재 재생 위치 */
 .score-cursor {
 	stroke: var(--color-cursor);

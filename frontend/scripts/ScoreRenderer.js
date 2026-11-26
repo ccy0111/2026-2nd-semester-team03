@@ -13,6 +13,11 @@
 //
 // chunkStatus 형식 (docs/EOS_CHUNK_RECOVERY.md)
 //   { index, startSec, endSec, status: "ok" | "recovered" | "failed", attempts, ... }
+//
+// 실시간 미리보기 (docs/CHUNK_NOTE_STREAM.md): 채보 중 5초 구간이 끝날 때마다 다시 그림
+//   render(확정 음표, 지금까지 구간들, { live: true, provisional, doneSec, totalSec })
+//   - provisional: 아직 다음 구간으로 이어지는 음 → 흐리게(점선) 그림, 매번 통째로 바뀜
+//   - doneSec 이후(아직 채보 안 된 곳)는 어둡게 덮고 "채보 중" 선 표시
 // ==========================================================
 
 import { getInstrument, instrumentOrder } from "./instruments.js";
@@ -34,6 +39,7 @@ export class ScoreRenderer {
 		this.instrumentGroups = new Map(); // 악기 key → 그 악기 음표를 담은 <g>
 		this.onSeek = null; // 악보 클릭 시 호출할 함수 (App에서 연결)
 		this.userScrolledAt = 0; // 사용자가 직접 스크롤한 시각
+		this.liveRange = null;   // 실시간 미리보기 중 음높이 범위 (줄어들지 않게 → 화면이 덜 흔들림)
 
 		// 사용자가 직접 스크롤하면 잠깐 동안 자동 따라가기를 멈춤
 		const markUserScroll = () => { this.userScrolledAt = performance.now(); };
@@ -61,21 +67,36 @@ export class ScoreRenderer {
 		this.svg = null;
 		this.cursor = null;
 		this.instrumentGroups.clear();
+		this.liveRange = null;
 	}
 
 	// 반환값: 그려진 악기 목록 [{ key, name, color, count }] (범례용)
-	render(notes, chunkStatuses = []) {
+	render(notes, chunkStatuses = [], { live = false, provisional = [], doneSec = 0, totalSec = 0 } = {}) {
 		// 값이 이상한 음표·구간은 그리지 않음 (그림 전체가 깨지는 것 방지)
 		const valid = notes.filter((note) => ScoreRenderer.isValidNote(note));
 		const melodic = valid.filter((note) => !note.isDrum);
 		const drums = valid.filter((note) => note.isDrum);
+		const carried = live ? provisional.filter((note) => ScoreRenderer.isValidNote(note) && !note.isDrum) : [];
 		chunkStatuses = chunkStatuses.filter((chunk) => this.isValidChunk(chunk));
-		if (valid.length === 0 && chunkStatuses.length === 0) {
+		if (!live && valid.length === 0 && chunkStatuses.length === 0) {
 			this.clear("인식된 음표가 없습니다.");
 			return [];
 		}
 
-		const { minPitch, maxPitch, duration } = this.getRange(melodic, chunkStatuses, drums);
+		let { minPitch, maxPitch, duration } = this.getRange([...melodic, ...carried], chunkStatuses, drums);
+		if (live) {
+			// 곡 전체 길이로 미리 그려 두고, 음높이 범위는 넓어지기만 함 (다시 그릴 때 화면이 튀지 않게)
+			duration = Math.max(duration, totalSec);
+			if (this.liveRange) {
+				minPitch = Math.min(minPitch, this.liveRange.minPitch);
+				maxPitch = Math.max(maxPitch, this.liveRange.maxPitch);
+			}
+			this.liveRange = { minPitch, maxPitch };
+		} else {
+			this.liveRange = null;
+		}
+		// 다시 그릴 때 이전 그림의 악기 묶음이 섞이지 않게 새로 시작
+		this.instrumentGroups.clear();
 		const width = this.labelWidth + Math.ceil(duration) * this.pxPerSecond;
 		const pitchHeight = (maxPitch - minPitch + 1) * this.rowHeight;
 		const laneHeight = drums.length > 0 ? DRUM_LANE_HEIGHT : 0; // 드럼이 있을 때만 드럼 줄
@@ -101,13 +122,63 @@ export class ScoreRenderer {
 		this.drawChunkStatuses(chunkStatuses, height);
 		this.drawTimeLabels(duration); // 실패 구간 박스에 가려지지 않게 박스 다음에
 		const instruments = this.drawNotes(melodic, drums, laneHeight);
+		if (live) {
+			this.drawProvisional(carried);
+			this.drawPending(doneSec, duration, height);
+		}
 		this.drawCursor(height);
 
+		const scrollLeft = this.container.scrollLeft; // 다시 그려도 보던 위치 유지
 		this.container.innerHTML = "";
 		this.container.appendChild(this.svg);
+		this.container.scrollLeft = scrollLeft;
 		// 스크롤 계산에 쓸 여백 (매 프레임 계산하지 않도록 한 번만)
 		this.paddingLeft = parseFloat(getComputedStyle(this.container).paddingLeft) || 0;
+		// 실시간: 방금 채보한 위치가 보이도록 따라감 (직접 스크롤했으면 2초간 멈춤)
+		if (live) this.keepVisible(this.timeToX(doneSec));
 		return instruments;
+	}
+
+	// 아직 다음 구간으로 이어지는 음: 흐리게 + 점선 테두리 (확정되면 진하게 바뀜)
+	drawProvisional(notes) {
+		if (notes.length === 0) return;
+		const group = this.createElement("g", { class: "score-provisional" });
+		notes.forEach((note) => {
+			const instrument = getInstrument(note);
+			group.appendChild(this.createElement("rect", {
+				class: "score-note is-provisional",
+				x: this.timeToX(note.onset),
+				y: this.pitchToY(note.pitch) + 1,
+				width: Math.max(2, (note.offset - note.onset) * this.pxPerSecond),
+				height: this.rowHeight - 2,
+				rx: 2,
+				style: `fill: ${instrument.color}; stroke: ${instrument.color}`,
+			}));
+		});
+		this.svg.appendChild(group);
+	}
+
+	// 아직 채보하지 않은 곳: 어둡게 덮고, 경계에 "채보 중" 선과 글자
+	drawPending(doneSec, duration, height) {
+		if (doneSec >= duration) return;
+		const x = this.timeToX(doneSec);
+		this.svg.appendChild(this.createElement("rect", {
+			class: "score-pending",
+			x,
+			y: 0,
+			width: this.timeToX(duration) - x,
+			height,
+		}));
+		this.svg.appendChild(this.createElement("line", {
+			class: "score-live-edge",
+			x1: x,
+			y1: 0,
+			x2: x,
+			y2: height,
+		}));
+		const label = this.createElement("text", { class: "score-live-label", x: x + 6, y: 30 });
+		label.textContent = "채보 중…";
+		this.svg.appendChild(label);
 	}
 
 	// 범례 체크박스에서 호출: 악기별 음표 보이기/숨기기
