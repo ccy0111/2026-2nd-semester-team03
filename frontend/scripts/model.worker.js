@@ -5,11 +5,12 @@
 //
 // 메인 → 워커 메시지
 //   { type: "load" }
-//   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness }
+//   { type: "transcribe", pcm: Float32Array, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness, streamChunkNotes }
 // 워커 → 메인 메시지
 //   { type: "loaded" }
 //   { type: "progress", progress: { completedChunks, totalChunks, chunkStatus } }
-//   { type: "result", notes, chunkStatuses }
+//   { type: "chunk-notes", update } (opt-in)
+//   { type: "result", notes, chunkStatuses, midiBytes }
 //   { type: "error", message }
 // ==========================================================
 
@@ -30,7 +31,7 @@ self.addEventListener("message", async (event) => {
 			self.postMessage({ type: "loaded", runtime: modelRuntime });
 		}
 		if (type === "transcribe") {
-			const result = await transcribe(event.data.pcm, event.data.maxGenLen, event.data.boundaryMode, event.data.allowedPrograms, event.data.normalizeLoudness);
+			const result = await transcribe(event.data.pcm, event.data.maxGenLen, event.data.boundaryMode, event.data.allowedPrograms, event.data.normalizeLoudness, event.data.streamChunkNotes);
 			self.postMessage({ type: "result", ...result });
 		}
 	} catch (error) {
@@ -134,7 +135,7 @@ function loadModel() {
 	return loadPromise;
 }
 
-async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness = true) {
+async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normalizeLoudness = true, streamChunkNotes = false) {
 	if (!model) {
 		throw new Error("모델이 아직 준비되지 않았습니다.");
 	}
@@ -154,6 +155,9 @@ async function transcribe(pcm, maxGenLen, boundaryMode, allowedPrograms, normali
 	if (normalizeLoudness === true) {
 		const { normalizeInferenceLoudness } = await import("./inference-loudness.mjs");
 		pcm = normalizeInferenceLoudness(pcm);
+	}
+	if (streamChunkNotes === true) {
+		options.onChunkNotes = (update) => self.postMessage({ type: "chunk-notes", update });
 	}
 	const result = await model.transcribePcm(pcm, options);
 	// midiBytes: 모델이 만든 MIDI 파일 내용 (Uint8Array) → 프론트의 "MIDI 다운로드"에 사용

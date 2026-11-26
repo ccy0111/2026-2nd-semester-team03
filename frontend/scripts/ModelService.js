@@ -66,7 +66,7 @@ export class ModelService {
 	}
 
 	// MP3 File → { notes, chunkStatuses }
-	async transcribe(file, onProgress, { boundaryMode, allowedPrograms, normalizeLoudness = true } = {}) {
+	async transcribe(file, onProgress, { boundaryMode, allowedPrograms, normalizeLoudness = true, onChunkNotes } = {}) {
 		if (!this.isReady) {
 			throw new Error("모델이 아직 준비되지 않았습니다.");
 		}
@@ -89,10 +89,12 @@ export class ModelService {
 		}
 
 		// pcm.buffer를 복사하지 않고 워커로 넘김(transfer) → 큰 음원도 빠르게 전달
+		if (this.pending) throw new Error("A transcription is already running");
 		return this.request(
-			{ type: "transcribe", pcm, maxGenLen: DEV_MAX_GEN_LEN, boundaryMode, allowedPrograms, normalizeLoudness },
+			{ type: "transcribe", pcm, maxGenLen: DEV_MAX_GEN_LEN, boundaryMode, allowedPrograms, normalizeLoudness, streamChunkNotes: typeof onChunkNotes === "function" },
 			onProgress,
 			[pcm.buffer],
+			typeof onChunkNotes === "function" ? onChunkNotes : null,
 		);
 	}
 
@@ -112,7 +114,7 @@ export class ModelService {
 	}
 
 	// 워커에 메시지를 보내고, 답이 올 때까지 기다리는 Promise
-	request(message, onProgress = null, transfer = []) {
+	request(message, onProgress = null, transfer = [], onChunkNotes = null) {
 		return new Promise((resolve, reject) => {
 			// 워커가 이미 정리된 경우(페이지 이탈 등) 예외 대신 실패로 처리
 			if (!this.worker) {
@@ -121,7 +123,7 @@ export class ModelService {
 			}
 			// 이전 작업이 남아 있으면 먼저 실패 처리 (평소엔 일어나지 않음)
 			if (this.pending) this.finish("reject", new Error("이전 작업이 중단되었습니다."));
-			this.pending = { resolve, reject, onProgress };
+			this.pending = { resolve, reject, onProgress, onChunkNotes };
 			this.worker.postMessage(message, transfer);
 		});
 	}
@@ -129,6 +131,8 @@ export class ModelService {
 	handleMessage(data) {
 		if (data.type === "progress") {
 			this.pending?.onProgress?.(data.progress);
+		} else if (data.type === "chunk-notes") {
+			this.pending?.onChunkNotes?.(data.update);
 		} else if (data.type === "loaded") {
 			this.finish("resolve");
 		} else if (data.type === "result") {

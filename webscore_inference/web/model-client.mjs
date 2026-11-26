@@ -525,7 +525,7 @@ export class WebScoreClient {
     }
   }
 
-  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, signal = null, boundaryMode = "pitch-tie", allowedPrograms } = {}) {
+  async transcribePcm(pcm16k, { maxGenLen = 1024, onProgress = null, onChunkNotes = null, signal = null, boundaryMode = "pitch-tie", allowedPrograms } = {}) {
     if (this.disposed) throw new Error("Client has been disposed");
     if (this.transcribing) throw new Error("A transcription is already running");
     validateTokenLimit(maxGenLen);
@@ -543,6 +543,9 @@ export class WebScoreClient {
     try {
       if (this._nativeDecoderReleased) await this._fallbackFromNativeDecoder(signal);
       const chunks = splitPcmInto5sChunks(pcm16k);
+      const endSec = pcm16k.length / 16000;
+      const clipToAudio = notes => notes.filter(n => n.onset >= 0 && n.onset < endSec)
+        .map(n => ({ ...n, offset: Math.min(n.offset, endSec) }));
       const allNotes = [];
       const tokensByChunk = [];
       const chunkStatuses = [];
@@ -553,6 +556,7 @@ export class WebScoreClient {
       for (let idx = 0; idx < chunks.length; idx++) {
         throwIfAborted(signal);
         const { pcm, startSec } = chunks[idx];
+        const notesBefore = allNotes.length;
         const acoustics = nextAcoustics ?? {};
         nextAcoustics = null;
         // Native score stitching remains sequential. Only first passes that do not
@@ -598,7 +602,7 @@ export class WebScoreClient {
         if (paired && pairIndex === paired.eos.length - 1) paired = null;
         const forcePrelude = boundaryMode === "prelude-forcing" || (boundaryMode === "legacy" && idx > 0);
         const promptTokens = forcePrelude ? encodeTiePrologue(openNotes, this.lookup) : [];
-        const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, pcm16k.length / 16000), status: "ok", attempts: 1, boundaryReset: false };
+        const chunkStatus = { index: idx, startSec, endSec: Math.min(startSec + 5, endSec), status: "ok", attempts: 1, boundaryReset: false };
         let tokens;
         let onGpuWait = null;
         if (pairedEos !== true && idx + 1 < chunks.length && typeof this.decoderSession?.generateBlockNative === "function") {
@@ -644,13 +648,27 @@ export class WebScoreClient {
         }
         chunkStatuses.push(chunkStatus);
         if (onProgress) onProgress({ completedChunks: idx + 1, totalChunks: chunks.length, chunkStatus: { ...chunkStatus } });
+        if (onChunkNotes) {
+          throwIfAborted(signal);
+          const lastChunk = idx + 1 === chunks.length;
+          const completedNotes = allNotes.slice(notesBefore);
+          const carried = finalizeOpenNotes(openNotes, chunkStatus.endSec);
+          if (lastChunk) completedNotes.push(...carried);
+          onChunkNotes({
+            completedChunks: idx + 1,
+            totalChunks: chunks.length,
+            chunkStatus: { ...chunkStatus },
+            finalizedNotes: clipToAudio(completedNotes),
+            provisionalNotes: lastChunk ? [] : clipToAudio(carried.filter(n => n.onset < chunkStatus.endSec))
+              .map(n => ({ ...n, offset: Math.min(n.offset, chunkStatus.endSec) })),
+          });
+          throwIfAborted(signal);
+        }
       }
 
-      const endSec = pcm16k.length / 16000;
       allNotes.push(...finalizeOpenNotes(openNotes, endSec));
       // The final encoder input is padded to five seconds, but output must not be.
-      const notes = allNotes.filter(n => n.onset >= 0 && n.onset < endSec)
-        .map(n => ({ ...n, offset: Math.min(n.offset, endSec) }));
+      const notes = clipToAudio(allNotes);
       const midiBytes = encodeNotesToMidi(notes);
       return { notes, midiBytes, tokensByChunk, chunkStatuses };
     } finally { this.transcribing = false; }
